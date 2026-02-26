@@ -1,0 +1,36 @@
+{
+  "name": "moneyhero-backend",
+  "version": "1.0.0",
+  "description": "MoneyHero Smart Support Agent Backend - RAG-powered customer support API",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "ingest": "node src/ingest.js"
+  },
+  "keywords": [
+    "rag",
+    "langchain",
+    "ollama",
+    "express",
+    "support-agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "better-sqlite3": "^9.2.2",
+    "langchain": "^0.3.2",
+    "@langchain/community": "^0.3.0",
+    "@langchain/ollama": "^0.1.0",
+    "@langchain/core": "^0.3.0",
+    "hnswlib-node": "^3.0.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

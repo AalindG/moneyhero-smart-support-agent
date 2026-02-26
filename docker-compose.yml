@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: moneyhero-backend
+    ports:
+      - '3001:3001'
+    volumes:
+      - ./vectorstore:/app/vectorstore
+      - ./data:/app/data
+      - ./docs:/app/docs
+    environment:
+      - PORT=3001
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=llama3.2:1b
+      - OLLAMA_EMBED_MODEL=nomic-embed-text
+      - DB_PATH=/app/data/moneyhero.db
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    container_name: moneyhero-ollama
+    ports:
+      - '11434:11434'
+    restart: unless-stopped
