@@ -17,6 +17,9 @@ initializeTables()
 // Initialize Express app
 const app = express()
 
+// Trust the first proxy (Nginx) so express-rate-limit can read X-Forwarded-For correctly
+app.set('trust proxy', 1)
+
 // Configuration
 const PORT = process.env.PORT || 3001
 const NODE_ENV = process.env.NODE_ENV || 'development'
