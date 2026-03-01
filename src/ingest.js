@@ -6,6 +6,7 @@ import { OllamaEmbeddings } from '@langchain/ollama'
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
+import { validateEmbeddingModel, saveVectorstoreMetadata } from './config/embeddingValidation.js'
 
 // Load environment variables
 dotenv.config()
@@ -42,19 +43,23 @@ async function checkOllamaConnection() {
 async function ingestDocuments() {
   const startTime = Date.now()
 
-  console.log('🚀 Starting document ingestion...')
-  console.log(`📂 Loading documents from: ${DOCS_PATH}`)
-  console.log(`🔗 Ollama URL: ${OLLAMA_BASE_URL}`)
-  console.log(`🤖 Embedding Model: ${OLLAMA_EMBED_MODEL}\n`)
+  console.log('Starting document ingestion...')
+  console.log(`Loading documents from: ${DOCS_PATH}`)
+  console.log(`Ollama URL: ${OLLAMA_BASE_URL}`)
+  console.log(`Embedding Model: ${OLLAMA_EMBED_MODEL}\n`)
 
   try {
-    // Step 1: Check Ollama connection
-    console.log('⏳ Checking Ollama connection...')
+    // Step 1: Check Ollama connection and validate embedding model
+    console.log('Checking Ollama connection...')
     await checkOllamaConnection()
-    console.log('✅ Ollama is reachable\n')
+    console.log('Ollama is reachable\n')
+
+    // Validate embedding model is available
+    await validateEmbeddingModel(OLLAMA_EMBED_MODEL, OLLAMA_BASE_URL)
+    console.log('')
 
     // Step 2: Load all markdown files from docs directory
-    console.log('📖 Loading markdown files...')
+    console.log('Loading markdown files...')
     const loader = new DirectoryLoader(
       DOCS_PATH,
       {
@@ -64,7 +69,7 @@ async function ingestDocuments() {
     )
 
     const docs = await loader.load()
-    console.log(`✅ Loaded ${docs.length} documents\n`)
+    console.log(`Loaded ${docs.length} documents\n`)
 
     // Log each file loaded
     docs.forEach((doc, index) => {
@@ -73,21 +78,44 @@ async function ingestDocuments() {
     })
     console.log('')
 
-    // Step 3: Split documents into chunks
-    console.log('✂️  Splitting documents into chunks...')
+    // Step 3: Split documents into markdown-aware chunks
+    console.log('Splitting documents into chunks...')
     const textSplitter = new RecursiveCharacterTextSplitter({
       chunkSize: 1000,
-      chunkOverlap: 200
+      chunkOverlap: 200,
+      // Prefer splitting at headings and table boundaries to keep sections coherent
+      separators: ['\n## ', '\n### ', '\n|', '\n\n', '\n', ' ']
     })
 
     const splitDocs = await textSplitter.splitDocuments(docs)
-    console.log(`✅ Created ${splitDocs.length} chunks\n`)
+
+    // Step 3.1: Enrich every chunk with structured metadata for retrieval and citation.
+    //   source   — relative filepath within docs (e.g. "credit-cards/hsbc-revolution.md")
+    //   product  — filename without extension    (e.g. "hsbc-revolution")
+    //   category — parent folder name            (e.g. "credit-cards")
+    console.log('Enriching chunks with metadata...')
+    splitDocs.forEach(doc => {
+      const absolutePath = doc.metadata.source || ''
+      const pathParts = absolutePath.split('/')
+
+      // Locate the 'docs' segment to derive the relative path
+      const docsIndex = pathParts.indexOf('docs')
+      const category =
+        docsIndex >= 0 && pathParts[docsIndex + 1] ? pathParts[docsIndex + 1] : 'unknown'
+
+      const filename = pathParts[pathParts.length - 1] || 'unknown'
+      const product = filename.replace(/\.md$/, '')
+
+      doc.metadata.source = `${category}/${filename}`
+      doc.metadata.product = product
+      doc.metadata.category = category
+    })
+
+    console.log(`Created ${splitDocs.length} chunks with metadata\n`)
 
     // Step 4: Create embeddings and save to vector store
-    console.log('🧮 Generating embeddings and creating vector store...')
-    console.log(
-      '   (This may take a while depending on the number of chunks)\n'
-    )
+    console.log('Generating embeddings and creating vector store...')
+    console.log('   (This may take a while depending on the number of chunks)\n')
 
     const embeddings = new OllamaEmbeddings({
       model: OLLAMA_EMBED_MODEL,
@@ -98,30 +126,49 @@ async function ingestDocuments() {
     const vectorStore = await HNSWLib.fromDocuments(splitDocs, embeddings)
     await vectorStore.save(VECTORSTORE_PATH)
 
-    console.log(`✅ Vector store saved to: ${VECTORSTORE_PATH}\n`)
+    console.log(`Vector store saved to: ${VECTORSTORE_PATH}`)
 
-    // Step 5: Summary
+    // Save metadata for version tracking and validation
+    saveVectorstoreMetadata(VECTORSTORE_PATH, OLLAMA_EMBED_MODEL, docs.length, splitDocs.length)
+    console.log('')
+
+    // Step 5: Summary with quality metrics
     const endTime = Date.now()
     const duration = ((endTime - startTime) / 1000).toFixed(2)
 
-    console.log('🎉 Ingestion complete!')
+    // Calculate average chunk size
+    const totalChars = splitDocs.reduce((sum, doc) => sum + doc.pageContent.length, 0)
+    const avgChunkSize = Math.round(totalChars / splitDocs.length)
+
+    // Count chunks by category
+    const chunksByCategory = {}
+    splitDocs.forEach(doc => {
+      const category = doc.metadata.category || 'unknown'
+      chunksByCategory[category] = (chunksByCategory[category] || 0) + 1
+    })
+
+    console.log('Ingestion complete!')
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-    console.log(`📊 Summary:`)
-    console.log(`   • Documents loaded: ${docs.length}`)
-    console.log(`   • Total chunks: ${splitDocs.length}`)
+    console.log(`Summary:`)
+    console.log(`   • Total files ingested: ${docs.length}`)
+    console.log(`   • Total chunks created: ${splitDocs.length}`)
+    console.log(`   • Average chunk size: ${avgChunkSize} characters`)
+    console.log(`   • Chunks per category:`)
+    Object.entries(chunksByCategory)
+      .sort()
+      .forEach(([cat, count]) => {
+        console.log(`      - ${cat}: ${count} chunks`)
+      })
     console.log(`   • Time taken: ${duration}s`)
     console.log(`   • Vector store: ${VECTORSTORE_PATH}`)
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
   } catch (error) {
-    console.error('❌ Error during ingestion:')
+    console.error('Error during ingestion:')
     console.error(error.message)
 
     if (error.message.includes('Ollama not running')) {
-      console.error('\n💡 Make sure Ollama is running with: ollama serve')
-      console.error(
-        '   Then ensure the model is available: ollama pull ' +
-          OLLAMA_EMBED_MODEL
-      )
+      console.error('\nMake sure Ollama is running with: ollama serve')
+      console.error('   Then ensure the model is available: ollama pull ' + OLLAMA_EMBED_MODEL)
     }
 
     process.exit(1)
