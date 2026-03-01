@@ -1,10 +1,11 @@
 import dotenv from 'dotenv'
 import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama'
+import { ChatAnthropic } from '@langchain/anthropic'
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib'
 import { BufferMemory } from 'langchain/memory'
 import { ChatPromptTemplate } from '@langchain/core/prompts'
 import { StringOutputParser } from '@langchain/core/output_parsers'
-import { HumanMessage, AIMessage } from '@langchain/core/messages'
+import { HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { loadVectorstoreMetadata } from './config/embeddingValidation.js'
@@ -19,6 +20,14 @@ const projectRoot = join(__dirname, '..')
 
 // Configuration
 const VECTORSTORE_PATH = join(projectRoot, 'vectorstore')
+const LLM_PROVIDER = process.env.LLM_PROVIDER || 'claude' // 'claude' or 'ollama'
+
+// Claude Configuration
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-3-5-haiku-20241022'
+const CLAUDE_ENABLE_CACHING = process.env.CLAUDE_ENABLE_CACHING !== 'false' // Enabled by default
+
+// Ollama Configuration
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2'
 const OLLAMA_CLASSIFIER_MODEL = process.env.OLLAMA_CLASSIFIER_MODEL || 'llama3.2:1b'
@@ -28,8 +37,18 @@ const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'
 const MAX_MESSAGE_LENGTH = 2000
 const MAX_HISTORY_MESSAGES = 20 // Last 10 conversation pairs
 const RETRIEVAL_K = 5 // Number of document chunks to retrieve — raised to 5 for comparison queries
-const LLM_TIMEOUT_MS = 90000 // 90 seconds — 1b classifier (~5s) + retrieval (<1s) + 7b generation (~60s)
+const LLM_TIMEOUT_MS = LLM_PROVIDER === 'claude' ? 30000 : 90000 // Claude is 3-5x faster
 const LLM_TEMPERATURE = 0 // Factual financial Q&A — zero randomness for accuracy
+
+console.log(`🤖 LLM Provider: ${LLM_PROVIDER.toUpperCase()}`)
+if (LLM_PROVIDER === 'claude') {
+  console.log(`   Model: ${CLAUDE_MODEL}`)
+  console.log(`   Caching: ${CLAUDE_ENABLE_CACHING ? 'Enabled ✓' : 'Disabled'}`)
+} else {
+  console.log(`   Main Model: ${OLLAMA_MODEL}`)
+  console.log(`   Classifier: ${OLLAMA_CLASSIFIER_MODEL}`)
+}
+console.log(`   Embeddings: ${OLLAMA_EMBED_MODEL} (Ollama)`)
 
 // Layer 1: Customer-friendly RAG prompt that prevents hallucination
 // Uses <knowledge_base> XML delimiters to clearly separate retrieved context from instructions,
@@ -74,6 +93,40 @@ function evictStaleSessions() {
       console.log(`Evicted stale session memory: ${sessionId}`)
     }
   }
+}
+
+/**
+ * Create LLM instance based on configured provider
+ * @returns {ChatOllama|ChatAnthropic} LLM instance
+ */
+function createLLM() {
+  if (LLM_PROVIDER === 'claude') {
+    if (!ANTHROPIC_API_KEY) {
+      console.error('❌ ANTHROPIC_API_KEY not set. Falling back to Ollama.')
+      return new ChatOllama({
+        model: OLLAMA_MODEL,
+        baseUrl: OLLAMA_BASE_URL,
+        temperature: LLM_TEMPERATURE,
+        timeout: 90000
+      })
+    }
+    console.log('Using Claude (Anthropic) as LLM provider')
+    return new ChatAnthropic({
+      anthropicApiKey: ANTHROPIC_API_KEY,
+      model: CLAUDE_MODEL,
+      temperature: LLM_TEMPERATURE,
+      maxRetries: 2,
+      timeout: LLM_TIMEOUT_MS
+    })
+  }
+  // Ollama
+  console.log('Using Ollama as LLM provider')
+  return new ChatOllama({
+    model: OLLAMA_MODEL,
+    baseUrl: OLLAMA_BASE_URL,
+    temperature: LLM_TEMPERATURE,
+    timeout: LLM_TIMEOUT_MS
+  })
 }
 
 /**
@@ -144,12 +197,8 @@ function getSessionMemory(sessionId) {
  * @returns {Promise<{intent: string, confidence: number}>} Intent and confidence (0.0 to 1.0)
  */
 async function classifyIntent(message) {
-  const classifierLLM = new ChatOllama({
-    model: OLLAMA_CLASSIFIER_MODEL,
-    baseUrl: OLLAMA_BASE_URL,
-    temperature: 0.0,
-    timeout: 10000 // 10 second timeout for classification only
-  })
+  // Use the same LLM as main RAG (hybrid approach)
+  const classifierLLM = createLLM()
 
   const classificationPrompt = ChatPromptTemplate.fromMessages([
     [
@@ -230,9 +279,16 @@ function detectQueryCategory(message) {
     kw => lower.includes(kw)
   )
 
-  const isAboutCards = ['card', 'cashback', 'miles', 'rewards', 'annual fee', 'krisflyer', 'live fresh', 'revolution'].some(
-    kw => lower.includes(kw)
-  )
+  const isAboutCards = [
+    'card',
+    'cashback',
+    'miles',
+    'rewards',
+    'annual fee',
+    'krisflyer',
+    'live fresh',
+    'revolution'
+  ].some(kw => lower.includes(kw))
 
   // Only filter when the signal is unambiguous — mixed or neutral queries get all categories
   if (isAboutLoans && !isAboutCards) return 'personal-loans'
@@ -323,7 +379,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     )
 
     if (categoryFilteredDocs.length === 0) {
-      console.log(`Category filter removed all results — no ${queryCategory} docs in threshold range`)
+      console.log(
+        `Category filter removed all results — no ${queryCategory} docs in threshold range`
+      )
       if (streaming) throw new Error('NO_RELEVANT_DOCS')
       return {
         reply:
@@ -398,7 +456,31 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     // Non-streaming: invoke LLM with the fully-grounded prompt
     // Layer 2 (temperature=0) is already set on the llm instance passed in
     console.log('Generating response with LLM...')
-    const rawReply = await llm.invoke(fullPrompt)
+
+    // Use prompt caching for Claude to reduce costs by 90%
+    let rawReply
+    if (LLM_PROVIDER === 'claude' && CLAUDE_ENABLE_CACHING) {
+      // Split the grounded prompt into system (cacheable) and user parts
+      const systemPart = fullPrompt.substring(0, fullPrompt.lastIndexOf('Customer:'))
+      const userPart = fullPrompt.substring(fullPrompt.lastIndexOf('Customer:'))
+
+      // Use cache_control to cache the system prompt + context
+      rawReply = await llm.invoke([
+        new SystemMessage({
+          content: [
+            {
+              type: 'text',
+              text: systemPart,
+              cache_control: { type: 'ephemeral' } // Cache this for 5 minutes
+            }
+          ]
+        }),
+        new HumanMessage(userPart)
+      ])
+    } else {
+      rawReply = await llm.invoke(fullPrompt)
+    }
+
     const reply = typeof rawReply === 'string' ? rawReply : (rawReply.content ?? String(rawReply))
 
     console.log(`Response generated successfully (${reply.length} chars)`)
@@ -456,13 +538,8 @@ async function handleOffTopicIntent(sessionId, message) {
  * @returns {Promise<{reply: string, intent: string}|{prompt: string, memory: BufferMemory, intent: string}>}
  */
 async function processChat(sessionId, message, streaming) {
-  // Initialize LLM
-  const llm = new ChatOllama({
-    model: OLLAMA_MODEL,
-    baseUrl: OLLAMA_BASE_URL,
-    temperature: LLM_TEMPERATURE,
-    timeout: LLM_TIMEOUT_MS
-  })
+  // Initialize LLM based on provider
+  const llm = createLLM()
 
   // Step 1: Keyword pre-check for escalation — runs before the LLM classifier.
   // Small models (1B) are unreliable for safety-critical routing; keywords are deterministic.

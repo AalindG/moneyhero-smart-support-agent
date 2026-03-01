@@ -30,6 +30,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@langchain/anthropic": "^0.3.7",
     "@langchain/community": "^0.3.0",
     "@langchain/core": "^0.3.0",
     "@langchain/ollama": "^0.1.0",
