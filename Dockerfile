@@ -6,7 +6,8 @@ RUN apk add --no-cache \
     python3 \
     make \
     g++ \
-    cmake
+    cmake \
+    curl
 
 # Set working directory
 WORKDIR /app
@@ -16,6 +17,8 @@ COPY package*.json ./
 
 # Install dependencies
 RUN npm install
+
+# RUN npm run ingest
 
 # Copy source code
 COPY . .

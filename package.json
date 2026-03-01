@@ -7,7 +7,18 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "ingest": "node src/ingest.js"
+    "ingest": "node src/ingest.js",
+    "test": "node --test tests/*.test.js",
+    "test:api": "node --test tests/api.test.js",
+    "test:integration": "node --test tests/integration.test.js",
+    "test:database": "node --test tests/database.test.js",
+    "test:sse": "node --test tests/sse.test.js",
+    "test:validation": "node --test tests/validation.test.js",
+    "test:coverage": "node --test --experimental-test-coverage tests/*.test.js",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write src/",
+    "format:check": "prettier --check src/"
   },
   "keywords": [
     "rag",
@@ -19,15 +30,16 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
+    "@langchain/community": "^0.3.0",
+    "@langchain/core": "^0.3.0",
+    "@langchain/ollama": "^0.1.0",
+    "better-sqlite3": "^9.2.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "better-sqlite3": "^9.2.2",
-    "langchain": "^0.3.2",
-    "@langchain/community": "^0.3.0",
-    "@langchain/ollama": "^0.1.0",
-    "@langchain/core": "^0.3.0",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.2.1",
     "hnswlib-node": "^3.0.0",
+    "langchain": "^0.3.2",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
