@@ -13,6 +13,28 @@ import { addFinancialDisclaimer, addRegulatoryWarnings, applyBoldFormatting } fr
  */
 
 /**
+ * Send pre-computed text as a word-by-word SSE stream.
+ * Splits on whitespace boundaries and emits each segment as a `token` event
+ * with a small inter-token delay so the client renders progressive output.
+ * @param {object} res - Express response object
+ * @param {string} text - Text to stream
+ * @param {number} [delayMs=20] - Milliseconds between tokens
+ */
+async function fakeStream(res, text, delayMs = 20) {
+  // Split on whitespace, keeping the whitespace segments so spacing is preserved
+  const tokens = text.split(/(\s+)/).filter(t => t.length > 0)
+  for (const token of tokens) {
+    try {
+      res.write(`data: ${JSON.stringify({ token })}\n\n`)
+      if (res.flush) res.flush()
+    } catch {
+      break // Client disconnected
+    }
+    await new Promise(r => setTimeout(r, delayMs))
+  }
+}
+
+/**
  * Processes user messages and streams agent response via SSE
  * @param {object} req - Express request object
  * @param {object} res - Express response object
@@ -103,12 +125,9 @@ export async function handleChatMessage(req, res) {
           validationPassed: true
         })
 
-        console.log(`  [non-answer] sending ${disclaimedReply.length} chars directly`)
+        console.log(`  [non-answer] streaming ${disclaimedReply.length} chars`)
+        await fakeStream(res, disclaimedReply)
         try {
-          res.write(`data: ${JSON.stringify({ token: disclaimedReply })}\n\n`)
-          if (res.flush) {
-            res.flush()
-          }
           res.write('data: [DONE]\n\n')
           res.end()
         } catch (writeError) {
@@ -124,12 +143,9 @@ export async function handleChatMessage(req, res) {
 
       let fullResponse
       if (directReply) {
-        // Catalog queries: return retrieved doc content directly without LLM generation
-        console.log(`  [step 2/3] direct response (catalog) — ${directReply.length} chars`)
-        try {
-          res.write(`data: ${JSON.stringify({ token: directReply })}\n\n`)
-          if (res.flush) res.flush()
-        } catch { /* client disconnected */ }
+        // Catalog queries: stream retrieved doc content directly without LLM generation
+        console.log(`  [step 2/3] direct response (catalog) — streaming ${directReply.length} chars`)
+        await fakeStream(res, directReply)
         fullResponse = directReply
       } else {
         console.log(`  [step 2/3] streaming from Ollama... (prompt: ${prompt.length} chars)`)

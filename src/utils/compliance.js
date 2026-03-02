@@ -139,3 +139,93 @@ export function addRegulatoryWarnings(response) {
 
   return warned
 }
+/**
+ * Common profanity and offensive term patterns
+ * This is a basic filter - consider using a package like 'bad-words' for production
+ */
+const PROFANITY_PATTERNS = [
+  /\bf+u+c+k+/gi,
+  /\bs+h+i+t+/gi,
+  /\ba+s+s+h+o+l+e+/gi,
+  /\bb+i+t+c+h+/gi,
+  /\bd+a+m+n+/gi,
+  /\bc+r+a+p+/gi,
+  /\bh+e+l+l+/gi,
+  /\bp+i+s+s+/gi,
+  /\bc+o+c+k+/gi,
+  /\bd+i+c+k+/gi,
+  /\bp+u+s+s+y+/gi,
+  /\bs+l+u+t+/gi,
+  /\bw+h+o+r+e+/gi,
+  /\bf+a+g+/gi,
+  /\bn+i+g+g+/gi,
+  /\bc+u+n+t+/gi
+]
+
+/**
+ * Check if text contains profanity or offensive language
+ * @param {string} text - Text to check
+ * @returns {{hasProfanity: boolean, sanitized: string}}
+ */
+export function checkProfanity(text) {
+  let hasProfanity = false
+  let sanitized = text
+  
+  for (const pattern of PROFANITY_PATTERNS) {
+    if (pattern.test(text)) {
+      hasProfanity = true
+      // Replace with asterisks, keeping first and last characters
+      sanitized = sanitized.replace(pattern, match => {
+        if (match.length <= 2) return '*'.repeat(match.length)
+        return match[0] + '*'.repeat(match.length - 2) + match[match.length - 1]
+      })
+    }
+  }
+  
+  return { hasProfanity, sanitized }
+}
+
+/**
+ * Filter input message for profanity before processing
+ * @param {string} message - User input message
+ * @returns {{allowed: boolean, sanitized: string, reason?: string}}
+ */
+export function filterInputMessage(message) {
+  const profanityCheck = checkProfanity(message)
+  
+  if (profanityCheck.hasProfanity) {
+    return {
+      allowed: false,
+      sanitized: profanityCheck.sanitized,
+      reason: 'PROFANITY_DETECTED'
+    }
+  }
+  
+  return {
+    allowed: true,
+    sanitized: message
+  }
+}
+
+/**
+ * Sanitize output response if it contains inappropriate content
+ * @param {string} response - LLM generated response
+ * @returns {{valid: boolean, sanitized: string}}
+ */
+export function sanitizeOutput(response) {
+  const profanityCheck = checkProfanity(response)
+  
+  // If LLM somehow generated profanity, return a safe fallback
+  if (profanityCheck.hasProfanity) {
+    console.error('⚠️ LLM response contained profanity - replacing with safe fallback')
+    return {
+      valid: false,
+      sanitized: "I apologize, but I can't provide that response. How can I help you with information about credit cards or personal loans?"
+    }
+  }
+  
+  return {
+    valid: true,
+    sanitized: response
+  }
+}

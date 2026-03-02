@@ -3,10 +3,11 @@ import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama'
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib'
 import { BufferMemory } from 'langchain/memory'
 import { HumanMessage, AIMessage } from '@langchain/core/messages'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { loadVectorstoreMetadata } from './config/embeddingValidation.js'
+import { validateFinancialResponse, getSafeFallback } from './utils/responseValidator.js'
 
 // Load environment variables
 dotenv.config()
@@ -25,20 +26,46 @@ const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'
 
 // RAG Configuration Constants
 const MAX_MESSAGE_LENGTH = 2000
-const MAX_HISTORY_MESSAGES = 20 // Last 10 conversation pairs
+const MAX_HISTORY_MESSAGES = 20 // Fallback limit if token counting fails
+const MAX_HISTORY_TOKENS = 2000 // Approx 8000 chars - prevents context overflow
 const RETRIEVAL_K = 5 // Number of document chunks to retrieve — raised to 5 for comparison queries
 const LLM_TIMEOUT_MS = 90000 // 90 seconds — 1b classifier (~5s) + retrieval (<1s) + 7b generation (~60s)
 const LLM_TEMPERATURE = 0 // Factual financial Q&A — zero randomness for accuracy
 
-// Layer 1: Customer-friendly RAG prompt that prevents hallucination
-// Uses <knowledge_base> XML delimiters to clearly separate retrieved context from instructions,
-// preventing the model from confusing retrieved content with system instructions.
-const RAG_SYSTEM_PROMPT = `Use ONLY the information below to answer. Do not add anything from your training data.
+/**
+ * Estimate token count from text (1 token ≈ 4 characters for English)
+ * This is an approximation - for exact counts, use tiktoken or gpt-tokenizer
+ * @param {string} text - Text to count tokens for
+ * @returns {number} Estimated token count
+ */
+function estimateTokens(text) {
+  return Math.ceil(text.length / 4)
+}
 
+// Layer 1: Comprehensive RAG prompt with explicit role, constraints, and compliance language
+// Uses XML delimiters to clearly separate retrieved docs from instructions.
+// Includes fallback behavior and output format constraints to prevent hallucination.
+const RAG_SYSTEM_PROMPT = `You are MoneyHero's AI support assistant for credit cards and personal loans in Singapore. Your role is to help customers find the right financial products.
+
+<documents>
 {context}
+</documents>
 
-Q: {question}
-A:`
+CRITICAL RULES (follow exactly):
+1. Answer ONLY using information from the <documents> section above — never use your training data
+2. If documents don't contain the answer, respond: "I don't have that information. Would you like me to connect you with an advisor?"
+3. Be specific: include exact product names, rates, and fees as written in documents
+4. Never guarantee approval or eligibility — always say "may be eligible" or "typically requires"
+5. Always remind customers: "Verify current rates and terms directly with [bank name] before applying"
+6. Never provide investment advice, tax advice, or recommendations outside credit cards/personal loans
+7. If asked to compare, list differences objectively without saying which is "best"
+
+Previous conversation:
+{history}
+
+Customer question: {question}
+
+Answer (using documents only):`
 
 // Global state
 let vectorStore = null
@@ -128,28 +155,25 @@ function getSessionMemory(sessionId) {
 async function classifyIntent(message) {
   const classifyStart = Date.now()
 
-  // Use Ollama /api/generate (completion mode) with a few-shot prompt ending in " →"
-  // so the model fills in exactly one word instead of answering the user's question.
-  // Chat format confuses 1B models — they answer the user instead of classifying.
-  const classifyPrompt = `Classify the message. Output ONLY one word: answer, escalate, or off_topic.
+  // Use Ollama /api/generate with zero-shot classification to prevent prompt injection.
+  // User message is properly delimited and sanitized to prevent breaking out of the message context.
+  // The format makes it clear that everything after "message:" is untrusted user input.
+  
+  // Sanitize message: remove quotes, newlines, and limit length
+  const sanitizedMsg = message
+    .replace(/["\n\r]/g, ' ')  // Remove quotes and newlines
+    .replace(/[→←↑↓]/g, '')     // Remove arrow characters used in prompt
+    .slice(0, 200)               // Limit length
+    .trim()
+  
+  const classifyPrompt = `Classify this customer message into ONE category: answer, escalate, or off_topic.
 
-answer     = question about credit cards or personal loans
-escalate   = wants to speak to a human agent
-off_topic  = anything else (weather, cooking, stocks, mutual funds, insurance, crypto, etc.)
+answer = questions about credit cards or personal loans (features, rates, eligibility, applications)
+escalate = user explicitly wants to speak to a human agent
+off_topic = anything else (weather, stocks, insurance, crypto, general chat)
 
-"What are the benefits of the HSBC Revolution card?" → answer
-"List all available credit cards" → answer
-"What credit cards do you offer?" → answer
-"Compare DBS and OCBC cards" → answer
-"How do I apply for a personal loan?" → answer
-"I need to speak to a human agent" → escalate
-"Let me talk to someone please" → escalate
-"What's the weather today?" → off_topic
-"What mutual funds should I invest in?" → off_topic
-"Should I buy Bitcoin?" → off_topic
-"What insurance plan is best?" → off_topic
-
-"${message.replace(/"/g, "'")}" →`
+message: ${sanitizedMsg}
+category:`
 
   try {
     // Use streaming so the first token arrives as soon as the model starts generating.
@@ -280,14 +304,34 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       }
     }
 
-    // Gate 2: score filter — keep only docs close enough to be relevant.
-    // 0.55 is intentionally permissive: broad catalog queries ("what cards do you offer")
-    // have inherently higher cosine distances from individual product chunks than
-    // specific Q&A queries. The LLM's strict prompt guards against hallucination.
-    const MAX_DISTANCE_THRESHOLD = 0.55
+    // Gate 2: Adaptive score filter — adjust threshold based on query type
+    // Specific queries (e.g., "What is HSBC annual fee?") need tighter threshold for accuracy
+    // Broad queries (e.g., "What cards do you offer?") need looser threshold for recall
+    const lowerMsg = message.toLowerCase()
+    
+    // Detect query type for adaptive threshold
+    const isSpecificQuery = /\b(what is|how much|when|where|who)\b/i.test(message) ||
+                            /\b(fee|rate|income|age|requirement|eligibility)\b/i.test(message)
+    const isComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
+    const isBroadQuery = /\b(all|list|available|offer|have|what cards|what loans)\b/i.test(message)
+    
+    // Set threshold based on query type
+    let MAX_DISTANCE_THRESHOLD
+    if (isSpecificQuery) {
+      MAX_DISTANCE_THRESHOLD = 0.35  // Tight threshold for specific factual queries
+    } else if (isComparisonQuery) {
+      MAX_DISTANCE_THRESHOLD = 0.45  // Medium threshold for comparisons
+    } else if (isBroadQuery) {
+      MAX_DISTANCE_THRESHOLD = 0.55  // Loose threshold for broad catalog queries
+    } else {
+      MAX_DISTANCE_THRESHOLD = 0.40  // Default: moderately strict
+    }
+    
     const filteredDocs = candidateDocs.filter(([, score]) => score <= MAX_DISTANCE_THRESHOLD)
 
     // ── LAYER 4: Source logging ───────────────────────────────────────────────
+    console.log(`  [retrieval] query type: ${isSpecificQuery ? 'specific' : isComparisonQuery ? 'comparison' : isBroadQuery ? 'broad' : 'default'}`)
+    console.log(`  [retrieval] threshold: ${MAX_DISTANCE_THRESHOLD}`)
     console.log(`  [retrieval] query: "${message.slice(0, 80)}"`)
     console.log(
       `  [retrieval] candidates (top 10):`,
@@ -388,11 +432,158 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       // Fall through to LLM if file read failed
     }
 
-    // For specific (non-listing) queries, use targeted doc selection:
-    // 1. If a known card/loan name is in the message, prioritise that product's doc.
-    // 2. Otherwise fall back to the top-scored deduplicated doc.
-    // A 1B model answers correctly with a short, focused context (~500 chars);
-    // giving it 5 docs (~2600 chars) causes it to hallucinate from training data.
+    // ── LOAN CATALOG QUERY SHORTCUT ───────────────────────────────────────────
+    // For "what personal loans do you offer?" type queries, build a catalog
+    // by reading the personal-loans directory directly — same reason as above:
+    // there is no single overview.md for loans, and the 1B LLM confuses loan
+    // context with credit card names when asked for a listing.
+    const LOAN_LISTING_PATTERNS = [
+      /what personal loans? (do you|does|are) (offer|have|provide|available)/i,
+      /which personal loans? (do you|does)/i,
+      /list (all |the )?personal loans?/i,
+      /personal loans? (available|you offer|you have)/i,
+      /what (personal )?loans? (do you|does) (offer|have|provide)/i,
+      /available (personal )?loans?/i,
+      /(what|which) loans? (do you|are|you) (offer|have|provide|available)/i,
+      /loans? (you offer|you have|available)/i,
+    ]
+    const isLoanListingQuery = LOAN_LISTING_PATTERNS.some(p => p.test(message))
+
+    if (isLoanListingQuery) {
+      const loansDir = join(projectRoot, 'docs', 'personal-loans')
+      try {
+        const loanFiles = readdirSync(loansDir).filter(f => f.endsWith('.md'))
+        const summaries = []
+        for (const file of loanFiles) {
+          const content = readFileSync(join(loansDir, file), 'utf8')
+          const titleMatch = content.match(/^# (.+)$/m)
+          const title = titleMatch?.[1]?.trim() || file.replace('.md', '')
+          // Extract first sentence of ## Overview
+          const overviewIdx = content.indexOf('## Overview')
+          let snippet = ''
+          if (overviewIdx !== -1) {
+            const after = content.slice(overviewIdx + '## Overview'.length).trimStart()
+            const firstPara = after.split('\n\n')[0].trim()
+            const dotIdx = firstPara.search(/\.\s/)
+            snippet = dotIdx !== -1 ? firstPara.slice(0, dotIdx + 1) : firstPara.slice(0, 200)
+          }
+          summaries.push(snippet ? `- **${title}** — ${snippet}` : `- **${title}**`)
+        }
+        if (summaries.length > 0) {
+          const catalog = `We offer ${summaries.length} personal loan${summaries.length > 1 ? 's' : ''}:\n\n${summaries.join('\n\n')}`
+          const memory = getSessionMemory(sessionId)
+          const sources = loanFiles.map(f => `personal-loans/${f}`)
+          console.log(`  [retrieval] loan catalog → ${summaries.length} loan(s) from disk`)
+          if (streaming) return { directReply: catalog, memory, sources }
+          await memory.saveContext({ input: message }, { output: catalog })
+          return { reply: catalog, sources }
+        }
+      } catch (readErr) {
+        console.warn(`  [retrieval] could not read loans dir: ${readErr.message} — falling through`)
+      }
+    }
+
+    // ── CONTEXT SELECTION ─────────────────────────────────────────────────────
+    // Priority order: comparison shortcut → card-name routing → vector fallback
+    let context
+    let docSources
+    const lowerMsg = message.toLowerCase()
+
+    const sanitizeCtx = text =>
+      text
+        .replace(/<\/?(?:user|assistant|system)>/gi, '')
+        .replace(/\{context\}|\{question\}/gi, '')
+        .replace(/IMPORTANT RULES/gi, '')
+
+    // ── 1. COMPARISON QUERY: "which cards offer X?" ──────────────────────────
+    // No specific card named — answer requires comparing across all cards.
+    // top-1 fallback only sees the highest-scoring card and produces a one-card answer.
+    // Using overview.md gives the LLM per-card feature summaries for all 5 cards.
+    const COMPARISON_QUERY_PATTERNS = [
+      /which cards? (have|offer|come with|include|give|provide|support|let me|help me|allow)/i,
+      /what cards? (have|offer|come with|include|give|provide|support|let me|help me|allow)/i,
+      /cards? (with|that have|that offer|that come with|that include|that let|that allow)/i,
+      /which of (the |your )?cards?/i,
+      /best card(s)? for/i,
+      /which card(s)? is best/i,
+      /what card(s)? (is|are) (best|good|great|ideal)/i,
+      /card(s)? (that (earn|give|offer|have)|for earning|to earn)/i,
+      /earn (miles|cashback|rewards|points) (with|using|on)/i,
+      /cards? for (travel|dining|cashback|miles|rewards|online|petrol|groceries|shopping|entertainment)/i,
+      // Follow-up queries using "ones" instead of "cards" (e.g. "which ones are good for travel?")
+      /which ones? (are|have|offer|come with|include|give|provide|support|let|allow)/i,
+      /what ones? (are|have|offer|come with|include|give|provide|support|let|allow)/i,
+      /which ones? (is|are) (best|good|great|ideal|perfect) for/i,
+      /ones? (good|great|best|ideal|perfect) for/i,
+      /ones? (with|that have|that offer|that include|that let|that support)/i,
+    ]
+    const isComparisonQuery = COMPARISON_QUERY_PATTERNS.some(p => p.test(message))
+
+    if (isComparisonQuery) {
+      const overviewSrc = 'credit-cards/overview.md'
+      try {
+        const overviewRaw = readFileSync(join(projectRoot, 'docs', overviewSrc), 'utf8')
+
+        // Extract per-card bullet points from the "## Available Credit Cards" section
+        const sectionStart = overviewRaw.indexOf('## Available Credit Cards')
+        const sectionEnd = overviewRaw.indexOf('\n## ', sectionStart + 1)
+        const bulletSection = sectionStart !== -1
+          ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
+          : overviewRaw
+
+        // Each card is a markdown bullet starting with "- **Card Name**"
+        const cardBullets = bulletSection.match(/^- \*\*[^*]+\*\*.+$/gm) || []
+
+        // Extract feature keywords from the query (strip common stop words)
+        const STOP_WORDS = new Set([
+          'what', 'which', 'card', 'cards', 'come', 'with', 'offer', 'have', 'does',
+          'do', 'you', 'the', 'that', 'for', 'are', 'give', 'best', 'most', 'any',
+          'can', 'include', 'provide', 'support', 'me', 'tell', 'show', 'list', 'get',
+          'is', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'to', 'by', 'from', 'into',
+          // Follow-up / filler words that appear in "which ones are good for X?" queries
+          'ones', 'one', 'good', 'great', 'ideal', 'perfect', 'better', 'nice', 'well'
+        ])
+        const featureWords = lowerMsg.replace(/[^a-z\s]/g, '').split(/\s+/)
+          .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+
+        // Score each bullet by number of feature word hits
+        const scoredBullets = cardBullets.map(bullet => ({
+          bullet,
+          score: featureWords.filter(w => bullet.toLowerCase().includes(w)).length
+        })).filter(x => x.score > 0).sort((a, b) => b.score - a.score)
+
+        // Only return bullets at the highest score to avoid false positives.
+        // Example: "cashback on dining" has feature words [cashback, dining].
+        // Citi (score 2) and OCBC (score 2) beat HSBC (score 1, only matches "dining").
+        const maxScore = scoredBullets[0]?.score ?? 0
+        const topBullets = scoredBullets.filter(x => x.score === maxScore)
+
+        if (topBullets.length > 0) {
+          const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
+          const intro = topBullets.length === 1
+            ? 'One card matches your query:'
+            : `${topBullets.length} cards match your query:`
+          const directAnswer = `${intro}\n\n${matchedCards}`
+          console.log(`  [retrieval] comparison match → ${topBullets.length} card(s) from overview.md`)
+          docSources = [overviewSrc]
+          const memory = getSessionMemory(sessionId)
+          if (streaming) return { directReply: directAnswer, memory, sources: docSources }
+          await memory.saveContext({ input: message }, { output: directAnswer })
+          return { reply: directAnswer, sources: docSources }
+        }
+
+        // No keyword match — fall back to LLM with full overview.md as context
+        context = sanitizeCtx(overviewRaw)
+        docSources = [overviewSrc]
+        console.log(`  [retrieval] comparison query → no keyword match, LLM fallback with overview.md`)
+      } catch (e) {
+        console.warn(`  [retrieval] could not read overview.md: ${e.message} — falling through`)
+      }
+    }
+
+    // ── 2. CARD-NAME ROUTING: "What is the HSBC annual fee?" ─────────────────
+    // A specific card is mentioned — read that card's doc from disk so fee tables
+    // and other chunks that score poorly in vector search are always reachable.
     const CARD_DOC_MAP = {
       hsbc: 'hsbc-revolution.md', revolution: 'hsbc-revolution.md',
       citi: 'citi-cashback-plus.md', 'cashback plus': 'citi-cashback-plus.md',
@@ -402,15 +593,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       uob: 'uob-krisflyer.md', krisflyer: 'uob-krisflyer.md',
       'standard chartered': 'standard-chartered-cashone.md', cashone: 'standard-chartered-cashone.md',
     }
-    const lowerMsg = message.toLowerCase()
     const targetFile = Object.entries(CARD_DOC_MAP).find(([kw]) => lowerMsg.includes(kw))?.[1]
 
-    // For card-specific queries, read the target card's file directly from disk.
-    // Fee-table chunks are markdown tables that embed poorly and often fall outside
-    // the top-20 similarity results — disk read guarantees the full card content.
-    let context
-    let docSources
-    if (targetFile) {
+    if (!context && targetFile) {
       const cardSrc = `credit-cards/${targetFile}`
       const cardFilePath = join(projectRoot, 'docs', cardSrc)
       try {
@@ -493,12 +678,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
           }
         }
 
-        const sanitize = text =>
-          text
-            .replace(/<\/?(?:user|assistant|system)>/gi, '')
-            .replace(/\{context\}|\{question\}/gi, '')
-            .replace(/IMPORTANT RULES/gi, '')
-        context = sanitize(cardContent)
+        context = sanitizeCtx(cardContent)
         docSources = [cardSrc]
         console.log(`  [retrieval] card-name routing → ${targetFile} (disk read, ${context.length} chars)`)
       } catch (readErr) {
@@ -506,45 +686,57 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       }
     }
 
+    // ── 3. VECTOR STORE FALLBACK ──────────────────────────────────────────────
     if (!context) {
-      // Fall back to top-1 deduplicated doc from vector store
       const relevantDocs = dedupedDocs.slice(0, 1).map(([doc]) => doc)
       docSources = relevantDocs.map(doc => doc.metadata?.source || 'unknown')
       console.log(`  [retrieval] using top-scored doc: [${docSources.map(s => s.split('/').pop()).join(', ')}]`)
-
-      const sanitizeContext = text =>
-        text
-          .replace(/<\/?(?:user|assistant|system)>/gi, '')
-          .replace(/\{context\}|\{question\}/gi, '')
-          .replace(/IMPORTANT RULES/gi, '')
-      context = relevantDocs.map(doc => sanitizeContext(doc.pageContent)).join('\n\n---\n\n')
+      context = relevantDocs.map(doc => sanitizeCtx(doc.pageContent)).join('\n\n---\n\n')
     }
 
-    // Get conversation history
+    // Get conversation history with token-based limiting
     const memory = getSessionMemory(sessionId)
     const historyMessages = await memory.chatHistory.getMessages()
-    const cappedHistory = historyMessages.slice(-MAX_HISTORY_MESSAGES)
-    console.log(`  [context] history: ${cappedHistory.length} msgs | context: ${context.length} chars`)
+    
+    // Cap history by tokens (not just message count) to prevent context overflow
+    let tokenCount = 0
+    const cappedHistory = []
+    for (let i = historyMessages.length - 1; i >= 0; i--) {
+      const msg = historyMessages[i]
+      const msgTokens = estimateTokens(msg.content)
+      
+      if (tokenCount + msgTokens > MAX_HISTORY_TOKENS) {
+        break // Stop adding history if we exceed token limit
+      }
+      
+      cappedHistory.unshift(msg) // Add to front to maintain chronological order
+      tokenCount += msgTokens
+    }
+    
+    console.log(`  [context] history: ${cappedHistory.length} msgs (~${tokenCount} tokens) | context: ${context.length} chars (~${estimateTokens(context)} tokens)`)
 
-    // ── LAYER 1: Fill {context} and {question} in strict RAG prompt ──────────
+    // ── LAYER 1: Fill placeholders in strict RAG prompt ──────────────────────
     // Enhanced sanitization to prevent prompt injection attacks
+    // Sanitize BEFORE template substitution to prevent delimiter escape
     const sanitize = text =>
       text
-        .replace(/\n/g, ' ') // Remove newlines
-        .replace(/<\/?(?:user|assistant|system|knowledge_base)>/gi, '') // Remove role and context delimiter tags
-        .replace(/---+/g, '—') // Replace delimiters with em-dash
-        .replace(/\{context\}|\{question\}/gi, '') // Remove template variables
-        .replace(/IMPORTANT RULES/gi, '') // Block instruction override
-        .replace(/ignore.*previous.*instructions?/gi, '') // Block jailbreak attempts
-        .replace(/pretend you are/gi, '') // Block role manipulation
-        .replace(/new context:/gi, '') // Block context injection
+        .replace(/[\n\r]/g, ' ') // Remove all newlines
+        .replace(/<\/?(?:documents|user|assistant|system|customer|answer|question)?>/gi, '') // Remove XML/role tags
+        .replace(/---+/g, '—') // Replace section delimiters
+        .replace(/\{[^}]+\}/g, '') // Remove ALL template variables
+        .replace(/CRITICAL RULES/gi, '') // Block instruction override
+        .replace(/ignore\s+(all\s+)?previous\s+instructions?/gi, '') // Block jailbreak
+        .replace(/pretend\s+(you|to)\s+are/gi, '') // Block role manipulation
+        .replace(/(new|additional|ignore\s+above)\s+(context|documents|rules)[:：]/gi, '') // Block context injection
+        .replace(/[\u2190-\u21FF]/g, '') // Remove all arrow unicode characters
+        .replace(/[^\x00-\x7F]/gu, c => c.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')) // Normalize unicode to prevent variants
         .trim()
         .slice(0, MAX_MESSAGE_LENGTH) // Enforce max length
 
-    // Start with the context block filled in
-    let fullPrompt = RAG_SYSTEM_PROMPT.replace('{context}', context)
+    // Start with the context block filled in (sanitize context to prevent nested injection)
+    let fullPrompt = RAG_SYSTEM_PROMPT.replace('{context}', sanitize(context))
 
-    // Insert sanitized conversation history before the Question line
+    // Insert sanitized conversation history
     if (cappedHistory.length > 0) {
       const historyBlock = cappedHistory
         .map(msg => {
@@ -555,8 +747,8 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
         .filter(Boolean)
         .join('\n')
       fullPrompt = fullPrompt.replace(
-        'Q: {question}',
-        `${historyBlock}\n\nQ: {question}`
+        'Customer question: {question}',
+        `${historyBlock}\n\nCustomer question: {question}`
       )
     }
 
@@ -571,9 +763,20 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     // Layer 2 (temperature=0) is already set on the llm instance passed in
     console.log('Generating response with LLM...')
     const rawReply = await llm.invoke(fullPrompt)
-    const reply = typeof rawReply === 'string' ? rawReply : (rawReply.content ?? String(rawReply))
+    let reply = typeof rawReply === 'string' ? rawReply : (rawReply.content ?? String(rawReply))
 
     console.log(`Response generated successfully (${reply.length} chars)`)
+    
+    // Validate response for hallucination, fabrication, and inappropriate advice
+    const validation = validateFinancialResponse(reply, context)
+    if (!validation.valid) {
+      console.error(`❌ Response validation failed: ${validation.reason}`)
+      reply = getSafeFallback(reply, validation.reason)
+      console.log(`Using safe fallback response instead`)
+    } else {
+      console.log(`✓ Response validated successfully`)
+    }
+    
     console.log(`Sources: [${docSources.join(', ')}]`)
 
     // Save conversation to memory
@@ -676,7 +879,10 @@ async function processChat(sessionId, message, streaming) {
     'apply for', 'eligibility', 'minimum income', 'annual income',
     'what cards', 'which card', 'what loans', 'which loan',
     'offers', 'available cards', 'available loans', 'card comparison',
-    'compare cards', 'compare loans', 'best card', 'best loan'
+    'compare cards', 'compare loans', 'best card', 'best loan',
+    // Follow-up queries ("which ones are good for travel?") — route to answer
+    // so COMPARISON_QUERY_PATTERNS can handle them without hitting the LLM classifier
+    'which ones', 'what ones'
   ]
   const isFinancialQuery = ANSWER_KEYWORDS.some(kw => lowerMessage.includes(kw))
   if (isFinancialQuery) {
