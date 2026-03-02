@@ -16,8 +16,58 @@ const FINANCIAL_DISCLAIMER = `
  * Short disclaimer for brief responses
  */
 const SHORT_DISCLAIMER = `
-
+---
 *AI-generated information. Not financial advice. Verify details with institution.*`
+
+/**
+ * Known product names and key financial terms to bold in LLM responses.
+ * Applied deterministically so the small model doesn't need to do it.
+ */
+const BOLD_PRODUCTS = [
+  'HSBC Revolution Card',
+  'HSBC Revolution',
+  'Citi Cashback Plus Card',
+  'Citi Cashback Plus',
+  'DBS Live Fresh Card',
+  'DBS Live Fresh',
+  'OCBC 365 Card',
+  'OCBC 365',
+  'UOB KrisFlyer Card',
+  'UOB KrisFlyer',
+  'DBS CashOne',
+  'Standard Chartered CashOne',
+  'CashOne',
+]
+
+const BOLD_TERMS = [
+  /(\d+(?:\.\d+)?%\s*(?:cashback|p\.a\.|per annum|miles?|interest|EIR|APR))/gi,
+  /(S\$[\d,]+(?:\.\d+)?)/gi,
+  /(\d+x\s+(?:points?|miles?))/gi,
+]
+
+/**
+ * Apply deterministic bold formatting to known product names and key numbers.
+ * @param {string} response - LLM generated response
+ * @returns {string} Response with bold markers applied
+ */
+export function applyBoldFormatting(response) {
+  let result = response
+
+  // Bold product names (longest first to avoid partial matches)
+  const sorted = [...BOLD_PRODUCTS].sort((a, b) => b.length - a.length)
+  for (const name of sorted) {
+    // Only bold if not already bolded
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    result = result.replace(new RegExp(`(?<!\\*\\*)${escaped}(?!\\*\\*)`, 'g'), `**${name}**`)
+  }
+
+  // Bold key financial figures (percentages, dollar amounts, multipliers)
+  for (const pattern of BOLD_TERMS) {
+    result = result.replace(pattern, '**$1**')
+  }
+
+  return result
+}
 
 /**
  * Add appropriate financial disclaimer to response

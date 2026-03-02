@@ -5,7 +5,7 @@ import { chat } from '../agent.js'
 import { streamResponse } from '../services/ollama.service.js'
 import { setupSSE } from '../middleware/sse.js'
 import { validateRequestParams } from '../middleware/validation.js'
-import { addFinancialDisclaimer, addRegulatoryWarnings } from '../utils/compliance.js'
+import { addFinancialDisclaimer, addRegulatoryWarnings, applyBoldFormatting } from '../utils/compliance.js'
 
 /**
  * Chat Controller
@@ -22,15 +22,23 @@ export async function handleChatMessage(req, res) {
 
   try {
     const { sessionId, message } = req.body
+    const requestStart = Date.now()
+
+    console.log(`── CHAT REQUEST ──────────────────────────────────────`)
+    console.log(`  session : ${sessionId}`)
+    console.log(`  message : "${(message || '').slice(0, 80)}${(message || '').length > 80 ? '…' : ''}"`)
+    console.log(`  length  : ${(message || '').length} chars`)
 
     // Validate inputs
     const validation = validateRequestParams(sessionId, message)
     if (!validation.valid) {
+      console.log(`  [validation failed] ${validation.error}`)
       return res.status(400).json({ error: validation.error })
     }
 
     // Verify session exists
     let session
+    const sessionLookupStart = Date.now()
     try {
       session = SessionModel.findById(sessionId)
     } catch (dbError) {
@@ -39,8 +47,10 @@ export async function handleChatMessage(req, res) {
     }
 
     if (!session) {
+      console.log(`  [session not found] ${sessionId}`)
       return res.status(404).json({ error: 'Session not found' })
     }
+    console.log(`  session lookup  : ${Date.now() - sessionLookupStart}ms`)
 
     // Setup SSE streaming
     const sse = setupSSE(res, req)
@@ -51,9 +61,10 @@ export async function handleChatMessage(req, res) {
 
     try {
       // Get response from RAG agent
-      console.log('Getting prompt from chat agent...')
+      console.log(`  [step 1/3] calling chat agent...`)
+      const agentStart = Date.now()
       const result = await chat(sessionId, message, true)
-      console.log(`Chat agent returned intent: ${result.intent}`)
+      console.log(`  [step 1/3] chat agent done — intent="${result.intent}" confidence=${result.confidence?.toFixed(2) ?? 'n/a'} (${Date.now() - agentStart}ms)`)
 
       // Calculate response time
       const responseTimeMs = Date.now() - startTime
@@ -92,6 +103,7 @@ export async function handleChatMessage(req, res) {
           validationPassed: true
         })
 
+        console.log(`  [non-answer] sending ${disclaimedReply.length} chars directly`)
         try {
           res.write(`data: ${JSON.stringify({ token: disclaimedReply })}\n\n`)
           if (res.flush) {
@@ -102,37 +114,48 @@ export async function handleChatMessage(req, res) {
         } catch (writeError) {
           console.log('Error writing non-answer response:', writeError.message)
         }
+        console.log(`  total request time : ${Date.now() - requestStart}ms`)
+        console.log(`── END ───────────────────────────────────────────────`)
         return
       }
 
-      // Handle answer intent with streaming
-      const { prompt, memory } = result
-      console.log('Streaming from Ollama API...')
+      // Handle answer intent — either direct (catalog) or streamed via Ollama
+      const { prompt, directReply, memory } = result
 
-      const fullResponse = await streamResponse(prompt, res)
-
-      console.log(`Ollama streaming complete, received ${fullResponse.length} characters`)
-
-      // Add financial compliance disclaimer and regulatory warnings to answer responses
-      const withDisclaimer = addFinancialDisclaimer(fullResponse, result.intent, fullResponse.length)
-      const disclaimedResponse = addRegulatoryWarnings(withDisclaimer)
-
-      // Stream any compliance content that was appended (disclaimer + regulatory warnings)
-      if (disclaimedResponse !== fullResponse) {
-        const complianceContent = disclaimedResponse.slice(fullResponse.length)
+      let fullResponse
+      if (directReply) {
+        // Catalog queries: return retrieved doc content directly without LLM generation
+        console.log(`  [step 2/3] direct response (catalog) — ${directReply.length} chars`)
         try {
-          res.write(`data: ${JSON.stringify({ token: complianceContent })}\n\n`)
-          if (res.flush) {
-            res.flush()
-          }
-        } catch (writeError) {
-          console.log('Error streaming compliance content:', writeError.message)
-        }
+          res.write(`data: ${JSON.stringify({ token: directReply })}\n\n`)
+          if (res.flush) res.flush()
+        } catch { /* client disconnected */ }
+        fullResponse = directReply
+      } else {
+        console.log(`  [step 2/3] streaming from Ollama... (prompt: ${prompt.length} chars)`)
+        const streamStart = Date.now()
+        fullResponse = await streamResponse(prompt, res)
+        console.log(`  [step 2/3] Ollama done — ${fullResponse.length} chars in ${Date.now() - streamStart}ms`)
       }
 
+      // Apply deterministic bold formatting + disclaimer + regulatory warnings.
+      // Send a single `bold` SSE event so the client replaces the streamed plain text
+      // with the final formatted version (bold markers + disclaimer appended).
+      const boldedResponse = applyBoldFormatting(fullResponse)
+      const withDisclaimer = addFinancialDisclaimer(boldedResponse, result.intent, boldedResponse.length)
+      const disclaimedResponse = addRegulatoryWarnings(withDisclaimer)
+
+      try {
+        res.write(`data: ${JSON.stringify({ bold: disclaimedResponse })}\n\n`)
+        if (res.flush) res.flush()
+      } catch { /* client disconnected */ }
+
       // Persist conversation to database (with compliance content)
+      console.log(`  [step 3/3] saving messages to DB...`)
+      const dbStart = Date.now()
       MessageModel.create(sessionId, 'user', message)
       MessageModel.create(sessionId, 'assistant', disclaimedResponse)
+      console.log(`  [step 3/3] DB save done (${Date.now() - dbStart}ms)`)
 
       // Log interaction to analytics
       const interactionId = AnalyticsModel.logInteraction({
@@ -168,8 +191,9 @@ export async function handleChatMessage(req, res) {
         validationPassed: true
       })
 
-      // Save raw LLM response to memory (without disclaimer) to avoid polluting future prompts
+      // Save raw LLM response to memory (plain, no bold/disclaimer) to avoid polluting future prompts
       await memory.saveContext({ input: message }, { output: fullResponse })
+      console.log(`  [step 3/3] memory saved`)
 
       // Send completion marker
       try {
@@ -179,7 +203,8 @@ export async function handleChatMessage(req, res) {
         console.log('Error sending completion marker:', endError.message)
       }
 
-      console.log('Streaming completed successfully')
+      console.log(`  total request time : ${Date.now() - requestStart}ms`)
+      console.log(`── END ───────────────────────────────────────────────`)
     } catch (streamError) {
       if (sseCleanup) {
         sseCleanup()
