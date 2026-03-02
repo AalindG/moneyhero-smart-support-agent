@@ -60,9 +60,6 @@ CRITICAL RULES (follow exactly):
 6. Never provide investment advice, tax advice, or recommendations outside credit cards/personal loans
 7. If asked to compare, list differences objectively without saying which is "best"
 
-Previous conversation:
-{history}
-
 Customer question: {question}
 
 Answer (using documents only):`
@@ -328,17 +325,17 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     const isSpecificQuery =
       /\b(what is|how much|when|where|who)\b/i.test(message) ||
       /\b(fee|rate|income|age|requirement|eligibility)\b/i.test(message)
-    const isComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
+    const isThresholdComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
     const isBroadQuery = /\b(all|list|available|offer|have|what cards|what loans)\b/i.test(message)
 
-    // Set threshold based on query type
+    // Set threshold based on query type (broad wins over comparison to avoid under-retrieval)
     let MAX_DISTANCE_THRESHOLD
-    if (isSpecificQuery) {
-      MAX_DISTANCE_THRESHOLD = 0.35 // Tight threshold for specific factual queries
-    } else if (isComparisonQuery) {
-      MAX_DISTANCE_THRESHOLD = 0.45 // Medium threshold for comparisons
-    } else if (isBroadQuery) {
+    if (isBroadQuery) {
       MAX_DISTANCE_THRESHOLD = 0.55 // Loose threshold for broad catalog queries
+    } else if (isSpecificQuery) {
+      MAX_DISTANCE_THRESHOLD = 0.35 // Tight threshold for specific factual queries
+    } else if (isThresholdComparisonQuery) {
+      MAX_DISTANCE_THRESHOLD = 0.45 // Medium threshold for comparisons
     } else {
       MAX_DISTANCE_THRESHOLD = 0.4 // Default: moderately strict
     }
@@ -347,7 +344,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
 
     // ── LAYER 4: Source logging ───────────────────────────────────────────────
     console.log(
-      `  [retrieval] query type: ${isSpecificQuery ? 'specific' : isComparisonQuery ? 'comparison' : isBroadQuery ? 'broad' : 'default'}`
+      `  [retrieval] query type: ${isBroadQuery ? 'broad' : isSpecificQuery ? 'specific' : isThresholdComparisonQuery ? 'comparison' : 'default'}`
     )
     console.log(`  [retrieval] threshold: ${MAX_DISTANCE_THRESHOLD}`)
     console.log(`  [retrieval] query: "${message.slice(0, 80)}"`)
@@ -547,6 +544,33 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     const isComparisonQuery = COMPARISON_QUERY_PATTERNS.some(p => p.test(message))
 
     if (isComparisonQuery) {
+      // Determine product type for the comparison — loan vs credit card
+      const isLoanComparison = ['loan', 'borrow', 'repayment', 'instalment', 'installment', 'cashone'].some(
+        kw => lowerMsg.includes(kw)
+      )
+
+      if (isLoanComparison) {
+        // Build loan comparison context from all personal loan files
+        const loansDir = join(projectRoot, 'docs', 'personal-loans')
+        try {
+          const loanFiles = readdirSync(loansDir).filter(f => f.endsWith('.md'))
+          const loanContextParts = []
+          for (const file of loanFiles) {
+            const content = readFileSync(join(loansDir, file), 'utf8')
+            loanContextParts.push(content)
+          }
+          if (loanContextParts.length > 0) {
+            context = sanitizeCtx(loanContextParts.join('\n\n---\n\n'))
+            docSources = loanFiles.map(f => `personal-loans/${f}`)
+            console.log(`  [retrieval] loan comparison → ${loanFiles.length} loan doc(s) as context`)
+          }
+        } catch (loanReadErr) {
+          console.warn(`  [retrieval] could not read loans dir for comparison: ${loanReadErr.message} — falling through`)
+        }
+      }
+
+      if (!context) {
+      // Credit card comparison — use overview.md for per-card feature summaries
       const overviewSrc = 'credit-cards/overview.md'
       try {
         const overviewRaw = readFileSync(join(projectRoot, 'docs', overviewSrc), 'utf8')
@@ -661,30 +685,42 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       } catch (e) {
         console.warn(`  [retrieval] could not read overview.md: ${e.message} — falling through`)
       }
-    }
+      } // end if (!context) credit-card comparison branch
+    } // end if (isComparisonQuery)
 
     // ── 2. CARD-NAME ROUTING: "What is the HSBC annual fee?" ─────────────────
-    // A specific card is mentioned — read that card's doc from disk so fee tables
+    // A specific card/loan is mentioned — read that product's doc from disk so fee tables
     // and other chunks that score poorly in vector search are always reachable.
-    const CARD_DOC_MAP = {
-      hsbc: 'hsbc-revolution.md',
-      revolution: 'hsbc-revolution.md',
-      citi: 'citi-cashback-plus.md',
-      'cashback plus': 'citi-cashback-plus.md',
-      'dbs live fresh': 'dbs-live-fresh.md',
-      'live fresh': 'dbs-live-fresh.md',
-      dbs: 'dbs-live-fresh.md',
-      ocbc: 'ocbc-365.md',
-      365: 'ocbc-365.md',
-      uob: 'uob-krisflyer.md',
-      krisflyer: 'uob-krisflyer.md',
-      'standard chartered': 'standard-chartered-cashone.md',
-      cashone: 'standard-chartered-cashone.md'
+    // Values are docs-relative paths (folder/file.md) — no hardcoded credit-cards/ prefix
+    // so loan docs are also reachable through this map.
+    // NOTE: Longest phrases must come first to avoid partial matches (e.g. "dbs live fresh"
+    //       must be checked before a bare "dbs" would be — but bare "dbs" is intentionally
+    //       omitted because DBS has both a credit card and a personal loan; the vector store
+    //       handles disambiguation better than a keyword map for that ambiguous case.
+    const PRODUCT_DOC_MAP = {
+      // Credit cards (unambiguous keywords)
+      hsbc: 'credit-cards/hsbc-revolution.md',
+      revolution: 'credit-cards/hsbc-revolution.md',
+      citi: 'credit-cards/citi-cashback-plus.md',
+      'cashback plus': 'credit-cards/citi-cashback-plus.md',
+      'dbs live fresh': 'credit-cards/dbs-live-fresh.md',
+      'live fresh': 'credit-cards/dbs-live-fresh.md',
+      ocbc: 'credit-cards/ocbc-365.md',
+      '365': 'credit-cards/ocbc-365.md',
+      uob: 'credit-cards/uob-krisflyer.md',
+      krisflyer: 'credit-cards/uob-krisflyer.md',
+      // Personal loans
+      'dbs personal loan': 'personal-loans/dbs-personal-loan.md',
+      'dbs loan': 'personal-loans/dbs-personal-loan.md',
+      'standard chartered cashone': 'personal-loans/standard-chartered-cashone.md',
+      'sc cashone': 'personal-loans/standard-chartered-cashone.md',
+      cashone: 'personal-loans/standard-chartered-cashone.md',
+      'standard chartered': 'personal-loans/standard-chartered-cashone.md'
     }
-    const targetFile = Object.entries(CARD_DOC_MAP).find(([kw]) => lowerMsg.includes(kw))?.[1]
+    const targetFile = Object.entries(PRODUCT_DOC_MAP).find(([kw]) => lowerMsg.includes(kw))?.[1]
 
     if (!context && targetFile) {
-      const cardSrc = `credit-cards/${targetFile}`
+      const cardSrc = targetFile // Already includes folder prefix (e.g. "credit-cards/hsbc-revolution.md")
       const cardFilePath = join(projectRoot, 'docs', cardSrc)
       try {
         const rawCard = readFileSync(cardFilePath, 'utf8')
@@ -779,8 +815,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
                 const colonIdx = matchedLine.indexOf(': ')
                 const feeKey = matchedLine.slice(0, colonIdx).trim()
                 const feeVal = matchedLine.slice(colonIdx + 2).trim()
-                // Reconstruct a human-friendly card name from the filename
+                // Reconstruct a human-friendly product name from the filename (strip folder prefix)
                 const cardDisplayName = targetFile
+                  .split('/').pop() // Remove folder prefix (e.g. "credit-cards/")
                   .replace('.md', '')
                   .split('-')
                   .map(w => w.charAt(0).toUpperCase() + w.slice(1))
@@ -789,6 +826,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
                   .replace('Dbs', 'DBS')
                   .replace('Uob', 'UOB')
                   .replace('Ocbc', 'OCBC')
+                  .replace('Sc', 'SC')
                 const directAnswer = `The ${feeKey} for the ${cardDisplayName} is ${feeVal}.`
                 console.log(`  [retrieval] fee line match → direct answer: "${directAnswer}"`)
                 docSources = [cardSrc]
@@ -950,7 +988,7 @@ async function handleEscalateIntent(sessionId, message) {
 async function handleOffTopicIntent(sessionId, message) {
   const memory = getSessionMemory(sessionId)
   const reply =
-    "I'm MoneyHero's support assistant, specialized in credit cards and personal loans in Hong Kong. I'm not able to help with that topic, but I'd love to help you find the right financial product! Ask me about credit card rewards, personal loan rates, eligibility requirements, or how to apply."
+    "I'm MoneyHero's support assistant, specialized in credit cards and personal loans in Singapore. I'm not able to help with that topic, but I'd love to help you find the right financial product! Ask me about credit card rewards, personal loan rates, eligibility requirements, or how to apply."
 
   // Save to memory
   await memory.saveContext({ input: message }, { output: reply })
