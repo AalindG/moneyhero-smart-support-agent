@@ -1,53 +1,102 @@
 # Standard Chartered CashOne Personal Loan
 
 ## Overview
+Standard Chartered CashOne is one of Singapore's most popular personal loans, known for competitive rates, fast approval, and flexible terms. Ideal for debt consolidation and major expenses.
 
-The Standard Chartered CashOne Personal Loan is designed for speed and convenience, offering same-day loan disbursement for urgent financial needs. Whether you're facing an unexpected medical bill, emergency home repair, or time-sensitive opportunity, CashOne delivers funds to your account within hours of approval - provided you apply and get approved before 2 PM on a business day. This makes it one of the fastest personal loan options in Singapore's banking landscape.
+## Key Features
+- Loan amount: **$1,000 to $250,000**
+- Interest rate: From **3.48% p.a.** (EIR from 6.95% p.a.)
+- Tenure: **1 to 5 years**
+- **No processing fee** (SingSaver exclusive)
+- Approval within **1 hour** for existing customers
+- Funds disbursed same day or next business day
 
-With loan amounts from S$1,000 to S$200,000 and competitive interest rates starting at 7.8% p.a., CashOne caters to both small short-term needs and larger expenses like home renovations or wedding costs. The loan features no processing fees, which is a significant advantage as most banks charge 1-2% upfront. This zero-fee structure means every dollar you borrow goes directly to your purpose, not to bank charges.
+## Why Choose CashOne?
+- One of the lowest interest rates in the market
+- No hidden fees when applying through SingSaver
+- Flexible repayment options
+- Option to restructure loan if needed
+- Top up facility available after 6 months
 
-Standard Chartered's CashOne is particularly popular among customers who value speed and simplicity. The entirely digital application process takes just 10 minutes to complete, and the bank's advanced credit assessment system can provide instant preliminary decisions for applicants with strong credit profiles. The loan is unsecured, requires no guarantor, and comes with the credibility of one of Singapore's leading international banks.
+## Interest Rate Structure
+| Loan Tenure | Interest Rate (Flat) | EIR |
+|-------------|---------------------|-----|
+| 1 year | 3.48% p.a. | 6.95% p.a. |
+| 2 years | 3.88% p.a. | 7.35% p.a. |
+| 3 years | 4.28% p.a. | 8.05% p.a. |
+| 4 years | 4.68% p.a. | 8.75% p.a. |
+| 5 years | 5.28% p.a. | 9.85% p.a. |
 
-## Key Benefits
+*Rates for customers with annual income $120,000+. Lower income tiers have different rates.*
 
-- **Same-day disbursement** - Receive your loan funds in your bank account on the same day if approved before 2 PM on weekdays, the fastest in Singapore
-- **Zero processing fees** - No upfront fees to pay; borrow S$50,000 and receive the full S$50,000, unlike competitors who deduct 1-2% processing charges
-- **Loan amounts up to S$200,000** - Access substantial funding for major life expenses with one of the highest maximum loan amounts available for personal loans
-- **Flexible tenure from 1 to 5 years** - Choose a repayment period that balances monthly affordability with total interest costs
-- **No income documents required for existing customers** - If you have an existing deposit or credit relationship with Standard Chartered, loan approval may not require fresh income documentation
-- **Instant online decision** - Many applicants receive a preliminary approval decision immediately upon submission through automated credit assessment
+## Eligibility Requirements
+- Minimum annual income: $20,000 (Singaporeans), $40,000 (Foreigners)
+- Singapore citizen, PR, or Employment Pass holder
+- Age 21-65 years old
+- Minimum 1 year work experience
 
-## Eligibility
+## Required Documents
 
-Standard Chartered CashOne has the following eligibility requirements:
+### For Salaried Employees
+- NRIC or Employment Pass
+- Latest computerized payslip, AND
+- Latest 12 months CPF contribution history
 
-- **Minimum Annual Income**: S$25,000 per year (one of the lowest minimum income requirements among major banks in Singapore)
-- **Citizenship**: Available to Singapore Citizens, Permanent Residents, and foreigners with valid work permits
-- **Age**: Must be at least 21 years old and not more than 60 years old at the time of loan maturity
-- **Employment**: Employed for minimum 6 consecutive months with current employer; self-employed applicants must show 2 years of continuous business operation
-- **Credit History**: Good credit standing with no recent defaults, legal suits, or bankruptcy; fresh credit records acceptable for graduates
-- **Debt Servicing Ratio**: Total monthly debt repayments must not exceed 12 times your monthly income (as per MAS unsecured credit regulations)
+### For Self-Employed
+- NRIC
+- Latest 2 years Notice of Assessment
+- Business registration (ACRA)
 
-## How to Apply
-
-Here's the quick and easy process to get your CashOne loan:
-
-1. **Check eligibility and calculate** - Use Standard Chartered's online loan calculator to estimate your monthly repayments based on the amount you need and your preferred tenure; ensure you meet minimum income requirements
-2. **Start online application** - Visit Standard Chartered's CashOne product page and click "Apply Now"; the form takes approximately 10 minutes to complete with all information at hand
-3. **Fill in application details** - Provide your NRIC/passport number, contact information, residential address, employment details (company name, industry, designation, length of service), and gross monthly income
-4. **Declare loan requirements** - State your desired loan amount, preferred tenure, and purpose of loan (e.g., debt consolidation, renovation, education, medical, wedding, or personal use)
-5. **Submit supporting documents** - Upload clear copies of your NRIC (front and back), latest computerized payslip, CPF contribution statement or Income Tax Notice of Assessment; for foreigners, include passport and valid work permit
-6. **Receive instant decision** - For many applicants, Standard Chartered's system provides an instant preliminary approval; others receive a decision call or email within 3-4 hours during business hours
-7. **Accept offer and get funds** - Once approved, review the loan agreement sent via email, digitally sign using Singpass or SMS OTP, and the funds will be transferred to your designated bank account - same day if completed before 2 PM on weekdays
-
-## Fees
-
+## Fees and Charges
 | Fee Type | Amount |
-|----------|---------|
-| Processing Fee | 0% (zero processing fee on all CashOne loans) |
-| Early Repayment Fee | 2% of outstanding principal amount if paid off before loan tenure |
-| Late Payment Fee | S$100 per month for late or missed installments |
-| Bounce Fee (Returned GIRO) | S$50 per failed payment attempt |
-| Effective Interest Rate | 7.8% - 10.2% p.a. (rate depends on loan amount, tenure, and credit assessment) |
-| Legal Fee for Recovery | Actual costs incurred if loan defaults and legal action required |
-| Statement Copy Fee | S$10 per historical statement requested |
+|----------|--------|
+| Processing Fee | Waived (via SingSaver) |
+| Early Repayment Fee | 3% of outstanding + $150 |
+| Late Payment Fee | $100 per month |
+| Loan Cancellation | $150 |
+
+## Monthly Repayment Examples
+
+### $20,000 loan at 3.88% p.a. for 2 years
+- Monthly repayment: $898
+- Total interest: $1,552
+- Total repayment: $21,552
+
+### $50,000 loan at 4.28% p.a. for 3 years
+- Monthly repayment: $1,566
+- Total interest: $6,380
+- Total repayment: $56,380
+
+### $100,000 loan at 5.28% p.a. for 5 years
+- Monthly repayment: $2,107
+- Total interest: $26,400
+- Total repayment: $126,400
+
+## SingSaver Exclusive Benefits
+- **$0 processing fee** (usually 1-3%)
+- **Cash gift up to $500** for approved applications
+- Priority processing
+- Dedicated support hotline
+
+## Application Process
+1. Check eligibility on SingSaver
+2. Use loan calculator to estimate repayments
+3. Click "Apply Now" and fill in details
+4. Upload documents via secure portal
+5. Receive approval (as fast as 1 hour)
+6. E-sign loan agreement
+7. Receive funds in your bank account
+
+## Debt Consolidation Tips
+If consolidating credit card debt:
+1. List all outstanding credit card balances
+2. Note the interest rates (usually 25-28% p.a.)
+3. A personal loan at 5% p.a. can save significant interest
+4. Example: $30,000 credit card debt at 26% p.a. = $7,800/year interest
+5. Same amount at 5% personal loan = $1,500/year interest
+6. Potential savings: **$6,300/year**
+
+## Contact Information
+- Hotline: 1800-747-7000
+- Email: sin.service@sc.com
+- WhatsApp: +65 8870 0000

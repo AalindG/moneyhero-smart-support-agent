@@ -1,42 +1,67 @@
 # Credit Card Basics FAQ
 
-## What is the difference between cashback and rewards points cards?
+## What is a credit card?
+A credit card is a payment card that allows you to borrow money from a bank to make purchases. You receive a monthly bill and can choose to pay the full amount or a minimum payment. Any unpaid balance carries interest.
 
-**Cashback cards** return a percentage of your spend directly as cash credit to your statement. They're simple, transparent, and require no redemption effort.
+## What's the difference between a credit card and a debit card?
+- **Credit card**: You borrow money from the bank and pay it back later. Builds credit history.
+- **Debit card**: Money is deducted directly from your bank account. No borrowing involved.
 
-**Rewards/points cards** earn points per dollar spent. Points can be redeemed for air miles, vouchers, merchandise, or cashback. They're more complex but can offer higher value for frequent travellers or savvy redeemers.
+## What is a credit limit?
+Your credit limit is the maximum amount you can borrow on your credit card at any time. It's determined by the bank based on your income, credit history, and existing debts. Typical limits range from $500 to $50,000+.
 
-## What is EIR (Effective Interest Rate)?
+## What is an annual fee?
+An annual fee is a yearly charge for owning the credit card. Not all cards have annual fees - many SingSaver partners offer fee waivers. Premium cards with more benefits typically have higher annual fees ($200-$600+).
 
-EIR is the true annual cost of borrowing, taking into account the compounding of interest and fees. It is always higher than the advertised flat rate. Always compare EIR when evaluating loans.
+## What is the minimum payment?
+The minimum payment is the smallest amount you must pay by your due date to keep your account in good standing. It's usually 3% of your outstanding balance or $50, whichever is higher. **Warning**: Paying only the minimum results in high interest charges.
 
-## What is the minimum payment on a credit card?
+## What is the interest rate on credit cards?
+Credit card interest rates in Singapore typically range from 25-28% p.a. This applies to any balance not paid in full by the due date. This is why it's important to pay your full statement balance each month.
 
-Minimum payment is typically 1% of your outstanding balance or $50, whichever is higher. However, paying only the minimum will accrue interest on the remaining balance at ~26.9% p.a.
+## How is interest calculated?
+Interest is calculated daily on your outstanding balance. If you don't pay your full statement balance, interest is charged on:
+1. The unpaid balance
+2. New purchases (no grace period once you carry a balance)
 
-## How does credit card interest work?
+### Example:
+- Outstanding balance: $5,000
+- Interest rate: 26% p.a.
+- Daily rate: 26% / 365 = 0.071%
+- Daily interest: $5,000 x 0.071% = $3.56
+- Monthly interest: ~$107
 
-- **Grace period**: If you pay your full statement balance by the due date, no interest is charged (typically 20–25 days after statement date)
-- **If you pay partially**: Interest is charged on the remaining balance from the transaction date at the prevailing rate (~26.9% p.a.)
-- **Cash advances**: No grace period — interest accrues immediately
+## What is a grace period?
+The grace period is the time between your statement date and payment due date (usually 21-25 days). If you pay your full balance within this period, you won't be charged interest on purchases.
 
-## What is the credit limit?
+## What is cashback vs miles vs points?
+- **Cashback**: You get money back (usually credited to your statement)
+- **Miles**: Rewards that can be redeemed for flights (KrisFlyer, Asia Miles)
+- **Points**: Can be converted to miles, vouchers, or merchandise
 
-Your credit limit is determined by the bank based on your income, credit history, and existing credit obligations. Under MAS guidelines, the aggregate credit limit across all unsecured credit facilities cannot exceed 12x your monthly income.
+## Which reward type is best for me?
+- **Choose cashback if**: You prefer simplicity and don't travel often
+- **Choose miles if**: You fly frequently and value premium cabin travel
+- **Choose points if**: You want flexibility in redemption options
 
-## What is a supplementary card?
+## What is a balance transfer?
+A balance transfer moves debt from one credit card to another, usually to take advantage of a lower interest rate (often 0% for a promotional period). Useful for paying down high-interest debt.
 
-A supplementary card is issued to a family member (spouse, parent, sibling, child 18+) linked to your primary card account. The primary cardholder is responsible for all charges on supplementary cards.
+## What affects my credit score?
+1. Payment history (most important - always pay on time!)
+2. Credit utilization (try to use less than 30% of your limit)
+3. Length of credit history
+4. Types of credit accounts
+5. Recent credit applications
 
-## How do I increase my credit limit?
+## How many credit cards should I have?
+There's no perfect number, but consider:
+- **1-2 cards**: Simple to manage, suitable for beginners
+- **3-4 cards**: Can maximize rewards across different categories
+- **5+ cards**: Only if you can track spending and pay all bills on time
 
-- Submit an income document update to the bank
-- Most banks allow online requests via their app or website
-- Increases are subject to MAS aggregate credit limit rules
-- You can also request a temporary limit increase for large purchases
-
-## What happens if I lose my card?
-
-1. Immediately call your bank's 24/7 hotline to block the card
-2. You are not liable for unauthorized charges if reported promptly
-3. A replacement card is typically issued within 3–5 business days
+## Can I get a credit card as a foreigner?
+Yes, Employment Pass holders can apply for credit cards in Singapore. Requirements:
+- Minimum income: Usually $40,000-$60,000 p.a.
+- At least 6 months remaining on your pass
+- 6+ months employment in Singapore

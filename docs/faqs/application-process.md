@@ -1,61 +1,121 @@
 # Application Process FAQ
 
+## How do I apply for a credit card or loan through SingSaver?
+1. Browse products on SingSaver.com.sg
+2. Compare features, rates, and rewards
+3. Click "Apply Now" on your chosen product
+4. Fill in the online application form
+5. Upload required documents
+6. Submit and wait for approval
+7. Receive your card/funds
+
 ## What documents do I need to apply?
 
-For **salaried employees**:
-- NRIC (front and back) or valid passport
-- Latest 3 months' payslips
-- Latest 6 months' CPF contribution history (for Citizens/PRs)
-
-For **self-employed individuals**:
+### For Singapore Citizens & PRs
 - NRIC (front and back)
-- Last 2 years' Notice of Assessment (NOA) from IRAS
-- Business registration documents (if applicable)
+- Income proof (one of the following):
+  - Latest 3 months computerised payslips
+  - Latest 12 months CPF contribution history
+  - Latest Notice of Assessment (NOA)
 
-For **commission-based earners**:
-- Last 12 months' payslips
-- Latest 2 years' NOA
+### For Foreigners (Employment Pass holders)
+- Employment Pass (front and back)
+- Passport bio page
+- Latest 3 months payslips
+- Employment letter
 
-## Can I apply using MyInfo?
-
-Yes! Most banks support SingPass MyInfo for instant document verification. This eliminates the need to upload physical documents and significantly speeds up approval.
+### For Self-Employed
+- NRIC
+- Latest 2 years Notice of Assessment
+- ACRA business profile (if applicable)
 
 ## How long does approval take?
 
-- **Credit cards**: 1–5 business days (instant in some cases with MyInfo)
-- **Personal loans**: 1–3 business days
-- **Same-day approval**: Available for existing customers at some banks
+### Credit Cards
+- Instant approval: Some banks offer immediate decisions
+- Standard: 2-5 business days
+- Complex cases: Up to 2 weeks
+
+### Personal Loans
+- Existing bank customers: Same day to 24 hours
+- New customers: 1-3 business days
+- Large loan amounts: Up to 1 week
+
+## What is MyInfo and should I use it?
+MyInfo is a Singapore government service that auto-fills your application using your Singpass data. Benefits:
+- Faster application (no manual data entry)
+- Fewer documents required
+- More accurate information
+- Faster approval in many cases
+
+**We recommend using MyInfo when available.**
 
 ## Can I check my application status?
+Yes! You can:
+1. Log into the bank's website/app
+2. Call the bank's hotline
+3. Check your email for updates
+4. Contact SingSaver support for assistance
 
-Yes. You can:
-1. Log in to the bank's app or website with your application reference number
-2. Call the bank's customer service hotline
-3. Check via MoneyHero's application tracker if applied through us
+## What happens after approval?
 
-## What if my application is rejected?
+### Credit Cards
+1. Receive approval notification (SMS/email)
+2. Card shipped to your registered address
+3. Delivery takes 5-7 business days
+4. Activate card via phone/app/website
+5. Set your PIN
+6. Start using your card
 
-You will receive an email or SMS notification with the reason. Common reasons include:
-- Annual income below minimum requirement
-- Existing debt obligations too high (Total Debt Servicing Ratio exceeded)
-- Incomplete or incorrect documentation
-- Poor credit history with Credit Bureau Singapore (CBS)
+### Personal Loans
+1. Receive approval notification
+2. Review loan terms and conditions
+3. E-sign the loan agreement
+4. Funds disbursed to your bank account
+5. First repayment due in 30 days
 
-**What to do if rejected:**
-- Wait 3–6 months before reapplying to avoid multiple hard enquiries affecting your credit score
-- Work on improving your credit score
-- Consider products with lower minimum income requirements
+## Why was my application rejected?
 
-## How many credit cards can I apply for at once?
+### Common Reasons
+1. **Income below requirement**: Each product has minimum income criteria
+2. **Poor credit score**: Late payments or defaults affect your score
+3. **Too many recent applications**: Multiple applications in short time is a red flag
+4. **High existing debt**: Debt-to-income ratio too high
+5. **Incomplete documents**: Missing or unclear documents
+6. **Employment issues**: Job hopping or probation period
 
-There is no official limit, but:
-- Each application triggers a hard credit enquiry which can temporarily lower your credit score
-- Banks may be cautious about approving multiple applications in a short period
-- We recommend applying for one card at a time and waiting for approval before the next
+### What to Do If Rejected
+1. Wait 3-6 months before reapplying
+2. Check your credit report at Credit Bureau Singapore
+3. Pay down existing debts
+4. Ensure stable employment
+5. Consider products with lower requirements
 
-## Can foreigners apply?
+## Can I apply for multiple cards at once?
+Technically yes, but we don't recommend it because:
+- Each application creates a credit inquiry
+- Multiple inquiries can lower your credit score
+- Banks may view it as desperate for credit
+- **Recommendation**: Apply for 1-2 cards at a time, wait 3-6 months between applications
 
-Yes, but requirements are stricter:
-- Minimum annual income is typically higher (e.g., $42,000–$60,000)
-- Valid Employment Pass, S Pass, or EntrePass required
-- Passport and proof of Singapore residency may be required
+## How do I cancel an application?
+Contact the bank directly:
+- Call their hotline
+- Visit a branch
+- Use online chat/email
+- Applications can usually be cancelled before card issuance
+
+## What is an in-principle approval?
+An in-principle approval (IPA) means the bank has preliminarily approved your application based on initial checks. Final approval depends on:
+- Document verification
+- Credit bureau check
+- Final underwriting review
+
+Not all IPAs result in final approval, but most do.
+
+## Do I need to be employed to apply?
+For most products, yes. However, some options exist for:
+- **Students**: Student credit cards with lower limits
+- **Freelancers**: With proof of income (invoices, bank statements)
+- **Retirees**: With CPF/pension income or fixed deposits
+- **Homemakers**: Supplementary cards on spouse's account
