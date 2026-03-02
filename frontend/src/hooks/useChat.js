@@ -34,6 +34,12 @@ export function useChat(sessionId, setMessages) {
             prev.map(m => (m.id === assistantId ? { ...m, content: m.content + token } : m))
           )
         },
+        onBold: bolded => {
+          // Replace the streamed plain text with the final bolded+disclaimer version
+          setMessages(prev =>
+            prev.map(m => (m.id === assistantId ? { ...m, content: bolded } : m))
+          )
+        },
         onDone: () => {
           setMessages(prev =>
             prev.map(m => (m.id === assistantId ? { ...m, streaming: false } : m))
@@ -42,7 +48,7 @@ export function useChat(sessionId, setMessages) {
         },
         onError: err => {
           const content =
-            err === 'NO_RELEVANT_DOCS'
+            err === 'NO_RELEVANT_DOCS' || err === 'response_filtered'
               ? "I don't have detailed information about that. Would you like me to connect you with one of our advisors?"
               : 'Something went wrong. Please try again.'
           setMessages(prev =>

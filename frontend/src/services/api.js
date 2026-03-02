@@ -28,7 +28,7 @@ export async function escalate(sessionId, reason) {
 /**
  * Stream a chat message. Returns an abort function.
  */
-export function streamChat(message, sessionId, { onToken, onDone, onError }) {
+export function streamChat(message, sessionId, { onToken, onBold, onDone, onError }) {
   const controller = new AbortController()
 
   ;(async () => {
@@ -64,7 +64,11 @@ export function streamChat(message, sessionId, { onToken, onDone, onError }) {
               onError(parsed.error)
               return
             }
-            if (parsed.token) onToken(parsed.token)
+            if (parsed.bold) {
+              onBold?.(parsed.bold)
+            } else if (parsed.token) {
+              onToken(parsed.token)
+            }
           } catch {
             // Partial JSON — skip
           }

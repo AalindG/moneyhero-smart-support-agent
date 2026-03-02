@@ -23,7 +23,7 @@ export function useHistory(sessionId) {
               id: m.id?.toString() || crypto.randomUUID(),
               role: m.role,
               content: m.content,
-              timestamp: m.created_at || new Date().toISOString(),
+              timestamp: m.timestamp || new Date().toISOString(),
             }))
           )
         }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { createSession } from '../services/api'
+import { createSession, getHistory } from '../services/api'
 
 const KEY = 'moneyhero_session_id'
 
@@ -22,8 +22,17 @@ export function useSession() {
   useEffect(() => {
     const stored = localStorage.getItem(KEY)
     if (stored) {
-      setSessionId(stored)
-      setLoading(false)
+      // Validate that the stored session still exists in the DB (handles DB resets)
+      getHistory(stored)
+        .then(() => {
+          setSessionId(stored)
+          setLoading(false)
+        })
+        .catch(() => {
+          // Session no longer valid — clear it and create a fresh one
+          localStorage.removeItem(KEY)
+          initSession()
+        })
     } else {
       initSession()
     }
