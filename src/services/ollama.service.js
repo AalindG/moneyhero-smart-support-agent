@@ -1,4 +1,4 @@
-import { OLLAMA } from '../config/constants.js'
+import { OLLAMA, RAG } from '../config/constants.js'
 import { validateStreamingToken, validateOutput } from '../middleware/outputValidation.js'
 
 /**
@@ -30,7 +30,7 @@ export async function streamResponse(prompt, res) {
         stream: true,
         options: {
           temperature: OLLAMA.TEMPERATURE,
-          num_predict: 900
+          num_predict: RAG.NUM_PREDICT
         }
       })
     })

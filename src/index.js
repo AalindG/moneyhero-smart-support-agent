@@ -37,7 +37,7 @@ const NODE_ENV = process.env.NODE_ENV || 'development'
 
 // CORS configuration - allow frontend origin with credentials
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
   credentials: true
 }
 

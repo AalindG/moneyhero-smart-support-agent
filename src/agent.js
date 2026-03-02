@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { loadVectorstoreMetadata } from './config/embeddingValidation.js'
 import { validateFinancialResponse, getSafeFallback } from './utils/responseValidator.js'
+import { VALIDATION, RAG } from './config/constants.js'
 
 // Load environment variables
 dotenv.config()
@@ -24,13 +25,9 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2'
 const OLLAMA_CLASSIFIER_MODEL = process.env.OLLAMA_CLASSIFIER_MODEL || 'llama3.2:1b'
 const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'
 
-// RAG Configuration Constants
-const MAX_MESSAGE_LENGTH = 2000
-const MAX_HISTORY_MESSAGES = 20 // Fallback limit if token counting fails
-const MAX_HISTORY_TOKENS = 2000 // Approx 8000 chars - prevents context overflow
-const RETRIEVAL_K = 5 // Number of document chunks to retrieve — raised to 5 for comparison queries
-const LLM_TIMEOUT_MS = 90000 // 90 seconds — 1b classifier (~5s) + retrieval (<1s) + 7b generation (~60s)
-const LLM_TEMPERATURE = 0 // Factual financial Q&A — zero randomness for accuracy
+// RAG Configuration Constants — sourced from src/config/constants.js
+const { MAX_MESSAGE_LENGTH } = VALIDATION
+const { MAX_HISTORY_TOKENS, LLM_TIMEOUT_MS, LLM_TEMPERATURE } = RAG
 
 /**
  * Estimate token count from text (1 token ≈ 4 characters for English)
@@ -68,7 +65,7 @@ Answer (using documents only):`
 let vectorStore = null
 const sessionMemories = new Map()
 const sessionLastAccess = new Map()
-const SESSION_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours
+const { SESSION_TTL_MS } = RAG
 
 // Evict sessions that haven't been accessed within TTL
 function evictStaleSessions() {
@@ -288,131 +285,30 @@ function detectQueryCategory(message) {
 async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
   try {
     console.log('Starting RAG retrieval...')
-    const store = await getVectorStore()
 
-    if (!store) {
-      console.error('Vector store unavailable — run "npm run ingest" to create it')
-      throw new Error('VECTORSTORE_UNAVAILABLE')
-    }
-
-    // ── LAYER 3: Retrieval gate ──────────────────────────────────────────────
-    // HNSWLib returns cosine DISTANCE: lower = more similar (0 = identical, 1 = orthogonal).
-    // Fetch 20 candidates so the score filter has enough docs to choose from.
-    console.log('  [retrieval] searching vectorstore...')
-    const retrievalStart = Date.now()
-    const candidateDocs = await store.similaritySearchWithScore(message, 20)
-    console.log(
-      `  [retrieval] got ${candidateDocs.length} candidates in ${Date.now() - retrievalStart}ms`
-    )
-
-    // Gate 1: vectorstore empty or retrieval failed completely
-    if (candidateDocs.length === 0) {
-      console.log('No documents found in vector store')
-      if (streaming) throw new Error('NO_RELEVANT_DOCS')
-      return {
-        reply:
-          "I don't have information about that in my knowledge base. Would you like to speak with our support team?",
-        sources: []
-      }
-    }
-
-    // Gate 2: Adaptive score filter — adjust threshold based on query type
-    // Specific queries (e.g., "What is HSBC annual fee?") need tighter threshold for accuracy
-    // Broad queries (e.g., "What cards do you offer?") need looser threshold for recall
+    // Initialise memory and lowerMsg at the top so all shortcuts can access them.
+    const memory = getSessionMemory(sessionId)
     const lowerMsg = message.toLowerCase()
 
-    // Detect query type for adaptive threshold
-    const isSpecificQuery =
-      /\b(what is|how much|when|where|who)\b/i.test(message) ||
-      /\b(fee|rate|income|age|requirement|eligibility)\b/i.test(message)
-    const isThresholdComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
-    const isBroadQuery = /\b(all|list|available|offer|have|what cards|what loans)\b/i.test(message)
+    // Helper: strip prompt-injection vectors from retrieved or disk-read content
+    const sanitizeCtx = text =>
+      text
+        .replace(/<\/?(?:user|assistant|system)>/gi, '')
+        .replace(/\{context\}|\{question\}/gi, '')
+        .replace(/IMPORTANT RULES/gi, '')
 
-    // Set threshold based on query type (broad wins over comparison to avoid under-retrieval)
-    let MAX_DISTANCE_THRESHOLD
-    if (isBroadQuery) {
-      MAX_DISTANCE_THRESHOLD = 0.55 // Loose threshold for broad catalog queries
-    } else if (isSpecificQuery) {
-      MAX_DISTANCE_THRESHOLD = 0.35 // Tight threshold for specific factual queries
-    } else if (isThresholdComparisonQuery) {
-      MAX_DISTANCE_THRESHOLD = 0.45 // Medium threshold for comparisons
-    } else {
-      MAX_DISTANCE_THRESHOLD = 0.4 // Default: moderately strict
-    }
+    // context and docSources remain null until a shortcut or vector search sets them
+    let context = null
+    let docSources = null
 
-    const filteredDocs = candidateDocs.filter(([, score]) => score <= MAX_DISTANCE_THRESHOLD)
-
-    // ── LAYER 4: Source logging ───────────────────────────────────────────────
-    console.log(
-      `  [retrieval] query type: ${isBroadQuery ? 'broad' : isSpecificQuery ? 'specific' : isThresholdComparisonQuery ? 'comparison' : 'default'}`
-    )
-    console.log(`  [retrieval] threshold: ${MAX_DISTANCE_THRESHOLD}`)
-    console.log(`  [retrieval] query: "${message.slice(0, 80)}"`)
-    console.log(
-      `  [retrieval] candidates (top 10):`,
-      candidateDocs
-        .slice(0, 10)
-        .map(
-          ([doc, score]) =>
-            `${doc.metadata?.source?.split('/').pop() || 'unknown'}(${score.toFixed(3)})`
-        )
-        .join(', ')
-    )
-    console.log(
-      `  [retrieval] score filter ≤${MAX_DISTANCE_THRESHOLD}: ${filteredDocs.length}/${candidateDocs.length} docs passed`
-    )
-
-    if (filteredDocs.length === 0) {
-      console.log(`  [retrieval] ALL docs filtered out — no relevant content found`)
-      if (streaming) throw new Error('NO_RELEVANT_DOCS')
-      return {
-        reply:
-          "I don't have information about that in my knowledge base. Would you like to speak with our support team?",
-        sources: []
-      }
-    }
-
-    // Gate 3: category filter — prevent credit card docs from appearing in loan answers and vice versa.
-    // FAQs (category 'faqs') are always included as they cover both product types.
-    const queryCategory = detectQueryCategory(message)
-    const categoryFilteredDocs = queryCategory
-      ? filteredDocs.filter(([doc]) => {
-          const cat = doc.metadata?.category
-          return cat === queryCategory || cat === 'faqs'
-        })
-      : filteredDocs
-
-    console.log(
-      `  [retrieval] category filter: detected="${queryCategory ?? 'none'}" kept ${categoryFilteredDocs.length}/${filteredDocs.length} docs`
-    )
-
-    if (categoryFilteredDocs.length === 0) {
-      console.log(
-        `  [retrieval] category filter removed all results — no ${queryCategory} docs in range`
-      )
-      if (streaming) throw new Error('NO_RELEVANT_DOCS')
-      return {
-        reply:
-          "I don't have information about that in my knowledge base. Would you like to speak with our support team?",
-        sources: []
-      }
-    }
-
-    // Deduplicate by source file — keep only the closest chunk per file.
-    // Prevents one file (e.g. dbs-live-fresh.md) from dominating context with multiple chunks
-    // and biasing the LLM toward that product when listing all products.
-    const seenSources = new Set()
-    const dedupedDocs = categoryFilteredDocs.filter(([doc]) => {
-      const src = doc.metadata?.source || 'unknown'
-      if (seenSources.has(src)) return false
-      seenSources.add(src)
-      return true
-    })
-
-    // ── CATALOG QUERY SHORTCUT ──────────────────────────────────────────────
-    // For "list all products" type queries, if overview.md is the top retrieved doc,
-    // return its content directly without LLM generation. A 1B model cannot reliably
-    // enumerate all 5 products from context; returning the source doc is 100% accurate.
+    // ── SHORTCUT 1: CATALOG QUERY ─────────────────────────────────────────────
+    // For "list all products" type queries, return overview.md content directly
+    // without LLM generation. A 1B model cannot reliably enumerate all 5 products
+    // from context; returning the source doc is 100% accurate.
+    // NOTE: Do NOT gate this on vector search rankings (topDocIsOverview). Individual
+    // card docs can outscore overview.md in the embedding space even for broad listing
+    // queries, causing the shortcut to silently miss and the LLM to receive only 1 card
+    // doc as context — producing wrong or refused answers.
     const LISTING_QUERY_PATTERNS = [
       /what (credit )?cards? (do you|does moneyHero|are|you) (offer|have|provide|available)/i,
       /which cards? (do you|does moneyHero|are|you)/i,
@@ -423,40 +319,48 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       /cards? (you offer|you have|available)/i
     ]
     const isListingQuery = LISTING_QUERY_PATTERNS.some(p => p.test(message))
-    const topDoc = dedupedDocs[0]?.[0]
-    const topDocIsOverview = topDoc?.metadata?.source?.endsWith('overview.md')
 
-    if (isListingQuery && topDocIsOverview) {
-      console.log(`  [retrieval] catalog query + overview.md top doc — reading file directly`)
-      // Read overview.md from disk instead of stitching vector store chunks.
-      // Chunks for individual card bullets may score beyond the top-20 similarity results,
-      // so the vector store path is unreliable for complete catalog listings.
-      const overviewSrc = topDoc.metadata?.source // e.g. "credit-cards/overview.md"
-      const overviewFilePath = join(projectRoot, 'docs', overviewSrc)
-      let overviewContent
+    if (isListingQuery) {
+      // Build catalog by scanning the credit-cards directory — same approach as the loan shortcut.
+      // There is no single overview.md; reading individual card files is both more reliable
+      // and resilient to future card additions without requiring an ingest rebuild.
+      const cardsDir = join(projectRoot, 'docs', 'credit-cards')
       try {
-        overviewContent = readFileSync(overviewFilePath, 'utf8')
-          .replace(/^#[^\n]*\n/m, '') // Remove leading H1
-          .trim()
-      } catch (readErr) {
-        console.warn(
-          `  [retrieval] could not read ${overviewFilePath}: ${readErr.message} — falling through to LLM`
-        )
-        overviewContent = null
-      }
-
-      if (overviewContent) {
-        const memory = getSessionMemory(sessionId)
-        if (streaming) {
-          return { directReply: overviewContent, memory, sources: [overviewSrc] }
+        const cardFiles = readdirSync(cardsDir).filter(f => f.endsWith('.md'))
+        const summaries = []
+        for (const file of cardFiles) {
+          const content = readFileSync(join(cardsDir, file), 'utf8')
+          const titleMatch = content.match(/^# (.+)$/m)
+          const title = titleMatch?.[1]?.trim() || file.replace('.md', '')
+          // Extract first sentence from ## Overview or ## Key Benefits for a one-line summary
+          let snippet = ''
+          const overviewIdx = content.indexOf('## Overview')
+          const keyBenefitsIdx = content.indexOf('## Key Benefits')
+          const sectionIdx = overviewIdx !== -1 ? overviewIdx : keyBenefitsIdx
+          if (sectionIdx !== -1) {
+            const sectionName = overviewIdx !== -1 ? '## Overview' : '## Key Benefits'
+            const after = content.slice(sectionIdx + sectionName.length).trimStart()
+            const firstPara = after.split('\n\n')[0].trim()
+            const dotIdx = firstPara.search(/\.\s/)
+            snippet = dotIdx !== -1 ? firstPara.slice(0, dotIdx + 1) : firstPara.slice(0, 150)
+          }
+          summaries.push(snippet ? `- **${title}** — ${snippet}` : `- **${title}**`)
         }
-        await memory.saveContext({ input: message }, { output: overviewContent })
-        return { reply: overviewContent, sources: [overviewSrc] }
+        if (summaries.length > 0) {
+          const catalog = `We offer ${summaries.length} credit card${summaries.length > 1 ? 's' : ''}:\n\n${summaries.join('\n\n')}`
+          const sources = cardFiles.map(f => `credit-cards/${f}`)
+          console.log(`  [shortcut] credit card catalog → ${summaries.length} card(s) from disk`)
+          if (streaming) return { directReply: catalog, memory, sources }
+          await memory.saveContext({ input: message }, { output: catalog })
+          return { reply: catalog, sources }
+        }
+      } catch (readErr) {
+        console.warn(`  [shortcut] could not read cards dir: ${readErr.message} — falling through to vector search`)
       }
-      // Fall through to LLM if file read failed
+      // Fall through to vector search if directory read failed
     }
 
-    // ── LOAN CATALOG QUERY SHORTCUT ───────────────────────────────────────────
+    // ── SHORTCUT 2: LOAN CATALOG QUERY ───────────────────────────────────────
     // For "what personal loans do you offer?" type queries, build a catalog
     // by reading the personal-loans directory directly — same reason as above:
     // there is no single overview.md for loans, and the 1B LLM confuses loan
@@ -495,200 +399,18 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
         }
         if (summaries.length > 0) {
           const catalog = `We offer ${summaries.length} personal loan${summaries.length > 1 ? 's' : ''}:\n\n${summaries.join('\n\n')}`
-          const memory = getSessionMemory(sessionId)
           const sources = loanFiles.map(f => `personal-loans/${f}`)
-          console.log(`  [retrieval] loan catalog → ${summaries.length} loan(s) from disk`)
+          console.log(`  [shortcut] loan catalog → ${summaries.length} loan(s) from disk`)
           if (streaming) return { directReply: catalog, memory, sources }
           await memory.saveContext({ input: message }, { output: catalog })
           return { reply: catalog, sources }
         }
       } catch (readErr) {
-        console.warn(`  [retrieval] could not read loans dir: ${readErr.message} — falling through`)
+        console.warn(`  [shortcut] could not read loans dir: ${readErr.message} — falling through to vector search`)
       }
     }
 
-    // ── CONTEXT SELECTION ─────────────────────────────────────────────────────
-    // Priority order: comparison shortcut → card-name routing → vector fallback
-    let context
-    let docSources
-    // Reuse lowerMsg from adaptive threshold section above
-
-    const sanitizeCtx = text =>
-      text
-        .replace(/<\/?(?:user|assistant|system)>/gi, '')
-        .replace(/\{context\}|\{question\}/gi, '')
-        .replace(/IMPORTANT RULES/gi, '')
-
-    // ── 1. COMPARISON QUERY: "which cards offer X?" ──────────────────────────
-    // No specific card named — answer requires comparing across all cards.
-    // top-1 fallback only sees the highest-scoring card and produces a one-card answer.
-    // Using overview.md gives the LLM per-card feature summaries for all 5 cards.
-    const COMPARISON_QUERY_PATTERNS = [
-      /which cards? (have|offer|come with|include|give|provide|support|let me|help me|allow)/i,
-      /what cards? (have|offer|come with|include|give|provide|support|let me|help me|allow)/i,
-      /cards? (with|that have|that offer|that come with|that include|that let|that allow)/i,
-      /which of (the |your )?cards?/i,
-      /best card(s)? for/i,
-      /which card(s)? is best/i,
-      /what card(s)? (is|are) (best|good|great|ideal)/i,
-      /card(s)? (that (earn|give|offer|have)|for earning|to earn)/i,
-      /earn (miles|cashback|rewards|points) (with|using|on)/i,
-      /cards? for (travel|dining|cashback|miles|rewards|online|petrol|groceries|shopping|entertainment)/i,
-      // Follow-up queries using "ones" instead of "cards" (e.g. "which ones are good for travel?")
-      /which ones? (are|have|offer|come with|include|give|provide|support|let|allow)/i,
-      /what ones? (are|have|offer|come with|include|give|provide|support|let|allow)/i,
-      /which ones? (is|are) (best|good|great|ideal|perfect) for/i,
-      /ones? (good|great|best|ideal|perfect) for/i,
-      /ones? (with|that have|that offer|that include|that let|that support)/i
-    ]
-    const isComparisonQuery = COMPARISON_QUERY_PATTERNS.some(p => p.test(message))
-
-    if (isComparisonQuery) {
-      // Determine product type for the comparison — loan vs credit card
-      const isLoanComparison = ['loan', 'borrow', 'repayment', 'instalment', 'installment', 'cashone'].some(
-        kw => lowerMsg.includes(kw)
-      )
-
-      if (isLoanComparison) {
-        // Build loan comparison context from all personal loan files
-        const loansDir = join(projectRoot, 'docs', 'personal-loans')
-        try {
-          const loanFiles = readdirSync(loansDir).filter(f => f.endsWith('.md'))
-          const loanContextParts = []
-          for (const file of loanFiles) {
-            const content = readFileSync(join(loansDir, file), 'utf8')
-            loanContextParts.push(content)
-          }
-          if (loanContextParts.length > 0) {
-            context = sanitizeCtx(loanContextParts.join('\n\n---\n\n'))
-            docSources = loanFiles.map(f => `personal-loans/${f}`)
-            console.log(`  [retrieval] loan comparison → ${loanFiles.length} loan doc(s) as context`)
-          }
-        } catch (loanReadErr) {
-          console.warn(`  [retrieval] could not read loans dir for comparison: ${loanReadErr.message} — falling through`)
-        }
-      }
-
-      if (!context) {
-      // Credit card comparison — use overview.md for per-card feature summaries
-      const overviewSrc = 'credit-cards/overview.md'
-      try {
-        const overviewRaw = readFileSync(join(projectRoot, 'docs', overviewSrc), 'utf8')
-
-        // Extract per-card bullet points from the "## Available Credit Cards" section
-        const sectionStart = overviewRaw.indexOf('## Available Credit Cards')
-        const sectionEnd = overviewRaw.indexOf('\n## ', sectionStart + 1)
-        const bulletSection =
-          sectionStart !== -1
-            ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
-            : overviewRaw
-
-        // Each card is a markdown bullet starting with "- **Card Name**"
-        const cardBullets = bulletSection.match(/^- \*\*[^*]+\*\*.+$/gm) || []
-
-        // Extract feature keywords from the query (strip common stop words)
-        const STOP_WORDS = new Set([
-          'what',
-          'which',
-          'card',
-          'cards',
-          'come',
-          'with',
-          'offer',
-          'have',
-          'does',
-          'do',
-          'you',
-          'the',
-          'that',
-          'for',
-          'are',
-          'give',
-          'best',
-          'most',
-          'any',
-          'can',
-          'include',
-          'provide',
-          'support',
-          'me',
-          'tell',
-          'show',
-          'list',
-          'get',
-          'is',
-          'a',
-          'an',
-          'and',
-          'or',
-          'of',
-          'in',
-          'on',
-          'to',
-          'by',
-          'from',
-          'into',
-          // Follow-up / filler words that appear in "which ones are good for X?" queries
-          'ones',
-          'one',
-          'good',
-          'great',
-          'ideal',
-          'perfect',
-          'better',
-          'nice',
-          'well'
-        ])
-        const featureWords = lowerMsg
-          .replace(/[^a-z\s]/g, '')
-          .split(/\s+/)
-          .filter(w => w.length > 2 && !STOP_WORDS.has(w))
-
-        // Score each bullet by number of feature word hits
-        const scoredBullets = cardBullets
-          .map(bullet => ({
-            bullet,
-            score: featureWords.filter(w => bullet.toLowerCase().includes(w)).length
-          }))
-          .filter(x => x.score > 0)
-          .sort((a, b) => b.score - a.score)
-
-        // Only return bullets at the highest score to avoid false positives.
-        // Example: "cashback on dining" has feature words [cashback, dining].
-        // Citi (score 2) and OCBC (score 2) beat HSBC (score 1, only matches "dining").
-        const maxScore = scoredBullets[0]?.score ?? 0
-        const topBullets = scoredBullets.filter(x => x.score === maxScore)
-
-        if (topBullets.length > 0) {
-          const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
-          const intro =
-            topBullets.length === 1
-              ? 'One card matches your query:'
-              : `${topBullets.length} cards match your query:`
-          const directAnswer = `${intro}\n\n${matchedCards}`
-          console.log(
-            `  [retrieval] comparison match → ${topBullets.length} card(s) from overview.md`
-          )
-          docSources = [overviewSrc]
-          const memory = getSessionMemory(sessionId)
-          if (streaming) return { directReply: directAnswer, memory, sources: docSources }
-          await memory.saveContext({ input: message }, { output: directAnswer })
-          return { reply: directAnswer, sources: docSources }
-        }
-
-        // No keyword match — fall back to LLM with full overview.md as context
-        context = sanitizeCtx(overviewRaw)
-        docSources = [overviewSrc]
-        console.log(
-          `  [retrieval] comparison query → no keyword match, LLM fallback with overview.md`
-        )
-      } catch (e) {
-        console.warn(`  [retrieval] could not read overview.md: ${e.message} — falling through`)
-      }
-      } // end if (!context) credit-card comparison branch
-    } // end if (isComparisonQuery)
-
-    // ── 2. CARD-NAME ROUTING: "What is the HSBC annual fee?" ─────────────────
+    // ── SHORTCUT 3: PRODUCT NAME ROUTING ─────────────────────────────────────
     // A specific card/loan is mentioned — read that product's doc from disk so fee tables
     // and other chunks that score poorly in vector search are always reachable.
     // Values are docs-relative paths (folder/file.md) — no hardcoded credit-cards/ prefix
@@ -719,7 +441,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     }
     const targetFile = Object.entries(PRODUCT_DOC_MAP).find(([kw]) => lowerMsg.includes(kw))?.[1]
 
-    if (!context && targetFile) {
+    if (targetFile) {
       const cardSrc = targetFile // Already includes folder prefix (e.g. "credit-cards/hsbc-revolution.md")
       const cardFilePath = join(projectRoot, 'docs', cardSrc)
       try {
@@ -786,6 +508,13 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
               .replace(/\n{3,}/g, '\n\n')
               .trim()
 
+            // Prefix with H1 title so the response always identifies the product
+            // (extracted sections don't contain the card/loan name on their own)
+            const titleLineMatch = rawCard.match(/^# .+$/m)
+            if (titleLineMatch) {
+              cardContent = `${titleLineMatch[0]}\n\n${cardContent}`
+            }
+
             // For the Fees section: try to find the exact line matching the query
             // and return it as a directReply, bypassing the LLM.
             // 1B models reliably drop specific amounts from table cells even in plain-text.
@@ -828,9 +557,8 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
                   .replace('Ocbc', 'OCBC')
                   .replace('Sc', 'SC')
                 const directAnswer = `The ${feeKey} for the ${cardDisplayName} is ${feeVal}.`
-                console.log(`  [retrieval] fee line match → direct answer: "${directAnswer}"`)
+                console.log(`  [shortcut] fee line match → direct answer: "${directAnswer}"`)
                 docSources = [cardSrc]
-                const memory = getSessionMemory(sessionId)
                 if (streaming) return { directReply: directAnswer, memory, sources: docSources }
                 await memory.saveContext({ input: message }, { output: directAnswer })
                 return { reply: directAnswer, sources: docSources }
@@ -838,35 +566,335 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
             }
 
             console.log(
-              `  [retrieval] extracted section "${matchedSection.heading}" (${cardContent.length} chars, table→plaintext)`
+              `  [shortcut] extracted section "${matchedSection.heading}" (${cardContent.length} chars, table→plaintext)`
             )
+            // Return extracted section as directReply — bypasses the LLM entirely.
+            // A 1B model with accumulated session history fails to extract facts from sections,
+            // but the section content is already human-readable without LLM reformatting.
+            docSources = [cardSrc]
+            if (streaming) return { directReply: cardContent, memory, sources: docSources }
+            await memory.saveContext({ input: message }, { output: cardContent })
+            return { reply: cardContent, sources: docSources }
           }
         }
 
-        context = sanitizeCtx(cardContent)
+        // General card overview (no section keyword matched, or heading not found in doc).
+        // Return the full doc as directReply — same reasoning: LLM fails with long history.
         docSources = [cardSrc]
         console.log(
-          `  [retrieval] card-name routing → ${targetFile} (disk read, ${context.length} chars)`
+          `  [shortcut] card-name routing (general) → ${targetFile} (${cardContent.length} chars) → direct reply`
         )
+        if (streaming) return { directReply: cardContent, memory, sources: docSources }
+        await memory.saveContext({ input: message }, { output: cardContent })
+        return { reply: cardContent, sources: docSources }
       } catch (readErr) {
         console.warn(
-          `  [retrieval] could not read ${cardFilePath}: ${readErr.message} — falling back to vector store`
+          `  [shortcut] could not read ${cardFilePath}: ${readErr.message} — falling back to vector store`
         )
       }
     }
 
-    // ── 3. VECTOR STORE FALLBACK ──────────────────────────────────────────────
+    // ── SHORTCUT 4: COMPARISON QUERY ─────────────────────────────────────────
+    // No specific card named — answer requires comparing across all cards.
+    // top-1 fallback only sees the highest-scoring card and produces a one-card answer.
+    // Using overview.md gives the LLM per-card feature summaries for all 5 cards.
+    const COMPARISON_QUERY_PATTERNS = [
+      /which cards? (have|offer|come with|include|give|provide|support|let me|help me|allow)/i,
+      /what cards? (have|offer|come with|include|give|provide|support|let me|help me|allow)/i,
+      /cards? (with|that have|that offer|that come with|that include|that let|that allow)/i,
+      /which of (the |your )?cards?/i,
+      /best card(s)? for/i,
+      /which card(s)? is best/i,
+      /what card(s)? (is|are) (best|good|great|ideal)/i,
+      /card(s)? (that (earn|give|offer|have)|for earning|to earn)/i,
+      /earn (miles|cashback|rewards|points) (with|using|on)/i,
+      /cards? for (travel|dining|cashback|miles|rewards|online|petrol|groceries|shopping|entertainment)/i,
+      // Follow-up queries using "ones" instead of "cards" (e.g. "which ones are good for travel?")
+      /which ones? (are|have|offer|come with|include|give|provide|support|let|allow)/i,
+      /what ones? (are|have|offer|come with|include|give|provide|support|let|allow)/i,
+      /which ones? (is|are) (best|good|great|ideal|perfect) for/i,
+      /ones? (good|great|best|ideal|perfect) for/i,
+      /ones? (with|that have|that offer|that include|that let|that support)/i
+    ]
+    const isComparisonQuery = COMPARISON_QUERY_PATTERNS.some(p => p.test(message))
+
+    if (!context && isComparisonQuery) {
+      // Determine product type for the comparison — loan vs credit card
+      const isLoanComparison = ['loan', 'borrow', 'repayment', 'instalment', 'installment', 'cashone'].some(
+        kw => lowerMsg.includes(kw)
+      )
+
+      if (isLoanComparison) {
+        // Build loan comparison context from all personal loan files
+        const loansDir = join(projectRoot, 'docs', 'personal-loans')
+        try {
+          const loanFiles = readdirSync(loansDir).filter(f => f.endsWith('.md'))
+          const loanContextParts = []
+          for (const file of loanFiles) {
+            const content = readFileSync(join(loansDir, file), 'utf8')
+            loanContextParts.push(content)
+          }
+          if (loanContextParts.length > 0) {
+            context = sanitizeCtx(loanContextParts.join('\n\n---\n\n'))
+            docSources = loanFiles.map(f => `personal-loans/${f}`)
+            console.log(`  [shortcut] loan comparison → ${loanFiles.length} loan doc(s) as context`)
+          }
+        } catch (loanReadErr) {
+          console.warn(`  [shortcut] could not read loans dir for comparison: ${loanReadErr.message} — falling through`)
+        }
+      }
+
+      if (!context) {
+        // Credit card comparison — use overview.md for per-card feature summaries
+        const overviewSrc = 'credit-cards/overview.md'
+        try {
+          const overviewRaw = readFileSync(join(projectRoot, 'docs', overviewSrc), 'utf8')
+
+          // Extract per-card bullet points from the "## Available Credit Cards" section
+          const sectionStart = overviewRaw.indexOf('## Available Credit Cards')
+          const sectionEnd = overviewRaw.indexOf('\n## ', sectionStart + 1)
+          const bulletSection =
+            sectionStart !== -1
+              ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
+              : overviewRaw
+
+          // Each card is a markdown bullet starting with "- **Card Name**"
+          const cardBullets = bulletSection.match(/^- \*\*[^*]+\*\*.+$/gm) || []
+
+          // Extract feature keywords from the query (strip common stop words)
+          const STOP_WORDS = new Set([
+            'what',
+            'which',
+            'card',
+            'cards',
+            'come',
+            'with',
+            'offer',
+            'have',
+            'does',
+            'do',
+            'you',
+            'the',
+            'that',
+            'for',
+            'are',
+            'give',
+            'best',
+            'most',
+            'any',
+            'can',
+            'include',
+            'provide',
+            'support',
+            'me',
+            'tell',
+            'show',
+            'list',
+            'get',
+            'is',
+            'a',
+            'an',
+            'and',
+            'or',
+            'of',
+            'in',
+            'on',
+            'to',
+            'by',
+            'from',
+            'into',
+            // Follow-up / filler words that appear in "which ones are good for X?" queries
+            'ones',
+            'one',
+            'good',
+            'great',
+            'ideal',
+            'perfect',
+            'better',
+            'nice',
+            'well'
+          ])
+          const featureWords = lowerMsg
+            .replace(/[^a-z\s]/g, '')
+            .split(/\s+/)
+            .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+
+          // Score each bullet by number of feature word hits
+          const scoredBullets = cardBullets
+            .map(bullet => ({
+              bullet,
+              score: featureWords.filter(w => bullet.toLowerCase().includes(w)).length
+            }))
+            .filter(x => x.score > 0)
+            .sort((a, b) => b.score - a.score)
+
+          // Only return bullets at the highest score to avoid false positives.
+          // Example: "cashback on dining" has feature words [cashback, dining].
+          // Citi (score 2) and OCBC (score 2) beat HSBC (score 1, only matches "dining").
+          const maxScore = scoredBullets[0]?.score ?? 0
+          const topBullets = scoredBullets.filter(x => x.score === maxScore)
+
+          if (topBullets.length > 0) {
+            const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
+            const intro =
+              topBullets.length === 1
+                ? 'One card matches your query:'
+                : `${topBullets.length} cards match your query:`
+            const directAnswer = `${intro}\n\n${matchedCards}`
+            console.log(
+              `  [shortcut] comparison match → ${topBullets.length} card(s) from overview.md`
+            )
+            docSources = [overviewSrc]
+            if (streaming) return { directReply: directAnswer, memory, sources: docSources }
+            await memory.saveContext({ input: message }, { output: directAnswer })
+            return { reply: directAnswer, sources: docSources }
+          }
+
+          // No keyword match — fall back to LLM with full overview.md as context
+          context = sanitizeCtx(overviewRaw)
+          docSources = [overviewSrc]
+          console.log(
+            `  [shortcut] comparison query → no keyword match, LLM fallback with overview.md`
+          )
+        } catch (e) {
+          console.warn(`  [shortcut] could not read overview.md: ${e.message} — falling through to vector search`)
+        }
+      } // end if (!context) credit-card comparison branch
+    } // end if (!context && isComparisonQuery)
+
+    // ── VECTOR SEARCH ─────────────────────────────────────────────────────────
+    // Only runs when no disk shortcut has already set context.
     if (!context) {
+      const store = await getVectorStore()
+
+      if (!store) {
+        console.error('Vector store unavailable — run "npm run ingest" to create it')
+        throw new Error('VECTORSTORE_UNAVAILABLE')
+      }
+
+      // ── LAYER 3: Retrieval gate ──────────────────────────────────────────────
+      // HNSWLib returns cosine DISTANCE: lower = more similar (0 = identical, 1 = orthogonal).
+      // Fetch 20 candidates so the score filter has enough docs to choose from.
+      console.log('  [retrieval] searching vectorstore...')
+      const retrievalStart = Date.now()
+      const candidateDocs = await store.similaritySearchWithScore(message, 20)
+      console.log(
+        `  [retrieval] got ${candidateDocs.length} candidates in ${Date.now() - retrievalStart}ms`
+      )
+
+      // Gate 1: vectorstore empty or retrieval failed completely
+      if (candidateDocs.length === 0) {
+        console.log('No documents found in vector store')
+        if (streaming) throw new Error('NO_RELEVANT_DOCS')
+        return {
+          reply:
+            "I don't have information about that in my knowledge base. Would you like to speak with our support team?",
+          sources: []
+        }
+      }
+
+      // Gate 2: Adaptive score filter — adjust threshold based on query type
+      // Specific queries (e.g., "What is HSBC annual fee?") need tighter threshold for accuracy
+      // Broad queries (e.g., "What cards do you offer?") need looser threshold for recall
+
+      // Detect query type for adaptive threshold
+      const isSpecificQuery =
+        /\b(what is|how much|when|where|who)\b/i.test(message) ||
+        /\b(fee|rate|income|age|requirement|eligibility)\b/i.test(message)
+      const isThresholdComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
+      const isBroadQuery = /\b(all|list|available|offer|have|what cards|what loans)\b/i.test(message)
+
+      // Set threshold based on query type (broad wins over comparison to avoid under-retrieval)
+      let MAX_DISTANCE_THRESHOLD
+      if (isBroadQuery) {
+        MAX_DISTANCE_THRESHOLD = 0.55 // Loose threshold for broad catalog queries
+      } else if (isSpecificQuery) {
+        MAX_DISTANCE_THRESHOLD = 0.35 // Tight threshold for specific factual queries
+      } else if (isThresholdComparisonQuery) {
+        MAX_DISTANCE_THRESHOLD = 0.45 // Medium threshold for comparisons
+      } else {
+        MAX_DISTANCE_THRESHOLD = 0.4 // Default: moderately strict
+      }
+
+      const filteredDocs = candidateDocs.filter(([, score]) => score <= MAX_DISTANCE_THRESHOLD)
+
+      // ── LAYER 4: Source logging ───────────────────────────────────────────────
+      console.log(
+        `  [retrieval] query type: ${isBroadQuery ? 'broad' : isSpecificQuery ? 'specific' : isThresholdComparisonQuery ? 'comparison' : 'default'}`
+      )
+      console.log(`  [retrieval] threshold: ${MAX_DISTANCE_THRESHOLD}`)
+      console.log(`  [retrieval] query: "${message.slice(0, 80)}"`)
+      console.log(
+        `  [retrieval] candidates (top 10):`,
+        candidateDocs
+          .slice(0, 10)
+          .map(
+            ([doc, score]) =>
+              `${doc.metadata?.source?.split('/').pop() || 'unknown'}(${score.toFixed(3)})`
+          )
+          .join(', ')
+      )
+      console.log(
+        `  [retrieval] score filter ≤${MAX_DISTANCE_THRESHOLD}: ${filteredDocs.length}/${candidateDocs.length} docs passed`
+      )
+
+      if (filteredDocs.length === 0) {
+        console.log(`  [retrieval] ALL docs filtered out — no relevant content found`)
+        if (streaming) throw new Error('NO_RELEVANT_DOCS')
+        return {
+          reply:
+            "I don't have information about that in my knowledge base. Would you like to speak with our support team?",
+          sources: []
+        }
+      }
+
+      // Gate 3: category filter — prevent credit card docs from appearing in loan answers and vice versa.
+      // FAQs (category 'faqs') are always included as they cover both product types.
+      const queryCategory = detectQueryCategory(message)
+      const categoryFilteredDocs = queryCategory
+        ? filteredDocs.filter(([doc]) => {
+            const cat = doc.metadata?.category
+            return cat === queryCategory || cat === 'faqs'
+          })
+        : filteredDocs
+
+      console.log(
+        `  [retrieval] category filter: detected="${queryCategory ?? 'none'}" kept ${categoryFilteredDocs.length}/${filteredDocs.length} docs`
+      )
+
+      if (categoryFilteredDocs.length === 0) {
+        console.log(
+          `  [retrieval] category filter removed all results — no ${queryCategory} docs in range`
+        )
+        if (streaming) throw new Error('NO_RELEVANT_DOCS')
+        return {
+          reply:
+            "I don't have information about that in my knowledge base. Would you like to speak with our support team?",
+          sources: []
+        }
+      }
+
+      // Deduplicate by source file — keep only the closest chunk per file.
+      // Prevents one file (e.g. dbs-live-fresh.md) from dominating context with multiple chunks
+      // and biasing the LLM toward that product when listing all products.
+      const seenSources = new Set()
+      const dedupedDocs = categoryFilteredDocs.filter(([doc]) => {
+        const src = doc.metadata?.source || 'unknown'
+        if (seenSources.has(src)) return false
+        seenSources.add(src)
+        return true
+      })
+
+      // Use the top-scored doc from the deduped set as context
       const relevantDocs = dedupedDocs.slice(0, 1).map(([doc]) => doc)
       docSources = relevantDocs.map(doc => doc.metadata?.source || 'unknown')
       console.log(
         `  [retrieval] using top-scored doc: [${docSources.map(s => s.split('/').pop()).join(', ')}]`
       )
       context = relevantDocs.map(doc => sanitizeCtx(doc.pageContent)).join('\n\n---\n\n')
-    }
+    } // end if (!context) vector search block
 
     // Get conversation history with token-based limiting
-    const memory = getSessionMemory(sessionId)
     const historyMessages = await memory.chatHistory.getMessages()
 
     // Cap history by tokens (not just message count) to prevent context overflow

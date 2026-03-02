@@ -51,8 +51,8 @@ export async function handleChatMessage(req, res) {
     console.log(`  message : "${(message || '').slice(0, 80)}${(message || '').length > 80 ? '…' : ''}"`)
     console.log(`  length  : ${(message || '').length} chars`)
 
-    // Validate inputs
-    const validation = validateRequestParams(sessionId, message)
+    // Validate inputs — use `?? ''` so undefined (missing key) triggers the !message check
+    const validation = validateRequestParams(sessionId, message ?? '')
     if (!validation.valid) {
       console.log(`  [validation failed] ${validation.error}`)
       return res.status(400).json({ error: validation.error })
