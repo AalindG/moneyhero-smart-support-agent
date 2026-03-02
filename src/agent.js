@@ -1,7 +1,11 @@
 import dotenv from 'dotenv'
 import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama'
+import { ChatAnthropic } from '@langchain/anthropic'
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib'
 import { BufferMemory } from 'langchain/memory'
+import { ChatPromptTemplate } from '@langchain/core/prompts'
+import { StringOutputParser } from '@langchain/core/output_parsers'
+import { HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages'
 import { HumanMessage, AIMessage } from '@langchain/core/messages'
 import { readFileSync, readdirSync } from 'fs'
 import { fileURLToPath } from 'url'
@@ -19,6 +23,14 @@ const projectRoot = join(__dirname, '..')
 
 // Configuration
 const VECTORSTORE_PATH = join(projectRoot, 'vectorstore')
+const LLM_PROVIDER = process.env.LLM_PROVIDER || 'claude' // 'claude' or 'ollama'
+
+// Claude Configuration
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-3-5-haiku-20241022'
+const CLAUDE_ENABLE_CACHING = process.env.CLAUDE_ENABLE_CACHING !== 'false' // Enabled by default
+
+// Ollama Configuration
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2'
 const OLLAMA_CLASSIFIER_MODEL = process.env.OLLAMA_CLASSIFIER_MODEL || 'llama3.2:1b'
@@ -29,23 +41,27 @@ const MAX_MESSAGE_LENGTH = 2000
 const MAX_HISTORY_MESSAGES = 20 // Fallback limit if token counting fails
 const MAX_HISTORY_TOKENS = 2000 // Approx 8000 chars - prevents context overflow
 const RETRIEVAL_K = 5 // Number of document chunks to retrieve — raised to 5 for comparison queries
-const LLM_TIMEOUT_MS = 90000 // 90 seconds — 1b classifier (~5s) + retrieval (<1s) + 7b generation (~60s)
+const LLM_TIMEOUT_MS = LLM_PROVIDER === 'claude' ? 30000 : 90000 // Claude is 3-5x faster
 const LLM_TEMPERATURE = 0 // Factual financial Q&A — zero randomness for accuracy
 
-/**
- * Estimate token count from text (1 token ≈ 4 characters for English)
- * This is an approximation - for exact counts, use tiktoken or gpt-tokenizer
- * @param {string} text - Text to count tokens for
- * @returns {number} Estimated token count
- */
-function estimateTokens(text) {
-  return Math.ceil(text.length / 4)
+console.log(`🤖 LLM Provider: ${LLM_PROVIDER.toUpperCase()}`)
+if (LLM_PROVIDER === 'claude') {
+  console.log(`   Model: ${CLAUDE_MODEL}`)
+  console.log(`   Caching: ${CLAUDE_ENABLE_CACHING ? 'Enabled ✓' : 'Disabled'}`)
+} else {
+  console.log(`   Main Model: ${OLLAMA_MODEL}`)
+  console.log(`   Classifier: ${OLLAMA_CLASSIFIER_MODEL}`)
 }
+console.log(`   Embeddings: ${OLLAMA_EMBED_MODEL} (Ollama)`)
 
+// Layer 1: Customer-friendly RAG prompt that prevents hallucination
+// Uses <knowledge_base> XML delimiters to clearly separate retrieved context from instructions,
+// preventing the model from confusing retrieved content with system instructions.
+const RAG_SYSTEM_PROMPT = `You are a knowledgeable financial support agent for MoneyHero, a comparison platform for credit cards and personal loans in Singapore.
 // Layer 1: Comprehensive RAG prompt with explicit role, constraints, and compliance language
 // Uses XML delimiters to clearly separate retrieved docs from instructions.
 // Includes fallback behavior and output format constraints to prevent hallucination.
-const RAG_SYSTEM_PROMPT = `You are MoneyHero's AI support assistant for credit cards and personal loans in Singapore. Your role is to help customers find the right financial products.
+const RAG_SYSTEM_PROMPT = You are MoneyHero's AI support assistant for credit cards and personal loans in Singapore. Your role is to help customers find the right financial products.
 
 <documents>
 {context}
@@ -80,6 +96,50 @@ function evictStaleSessions() {
       console.log(`Evicted stale session memory: ${sessionId}`)
     }
   }
+}
+
+/**
+ * Estimate token count from text (1 token ≈ 4 characters for English)
+ * This is an approximation - for exact counts, use tiktoken or gpt-tokenizer
+ * @param {string} text - Text to count tokens for
+ * @returns {number} Estimated token count
+ */
+function estimateTokens(text) {
+  return Math.ceil(text.length / 4)
+}
+
+/**
+ * Create LLM instance based on configured provider
+ * @returns {ChatOllama|ChatAnthropic} LLM instance
+ */
+function createLLM() {
+  if (LLM_PROVIDER === 'claude') {
+    if (!ANTHROPIC_API_KEY) {
+      console.error('❌ ANTHROPIC_API_KEY not set. Falling back to Ollama.')
+      return new ChatOllama({
+        model: OLLAMA_MODEL,
+        baseUrl: OLLAMA_BASE_URL,
+        temperature: LLM_TEMPERATURE,
+        timeout: 90000
+      })
+    }
+    console.log('Using Claude (Anthropic) as LLM provider')
+    return new ChatAnthropic({
+      anthropicApiKey: ANTHROPIC_API_KEY,
+      model: CLAUDE_MODEL,
+      temperature: LLM_TEMPERATURE,
+      maxRetries: 2,
+      timeout: LLM_TIMEOUT_MS
+    })
+  }
+  // Ollama
+  console.log('Using Ollama as LLM provider')
+  return new ChatOllama({
+    model: OLLAMA_MODEL,
+    baseUrl: OLLAMA_BASE_URL,
+    temperature: LLM_TEMPERATURE,
+    timeout: LLM_TIMEOUT_MS
+  })
 }
 
 /**
@@ -150,6 +210,8 @@ function getSessionMemory(sessionId) {
  * @returns {Promise<{intent: string, confidence: number}>} Intent and confidence (0.0 to 1.0)
  */
 async function classifyIntent(message) {
+  // Use the same LLM as main RAG (hybrid approach)
+  const classifierLLM = createLLM()
   const classifyStart = Date.now()
 
   // Use Ollama /api/generate with zero-shot classification to prevent prompt injection.
@@ -325,7 +387,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     const isSpecificQuery =
       /\b(what is|how much|when|where|who)\b/i.test(message) ||
       /\b(fee|rate|income|age|requirement|eligibility)\b/i.test(message)
-    const isThresholdComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
+    const isThresholdComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(
+      message
+    )
     const isBroadQuery = /\b(all|list|available|offer|have|what cards|what loans)\b/i.test(message)
 
     // Set threshold based on query type (broad wins over comparison to avoid under-retrieval)
@@ -545,9 +609,14 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
 
     if (isComparisonQuery) {
       // Determine product type for the comparison — loan vs credit card
-      const isLoanComparison = ['loan', 'borrow', 'repayment', 'instalment', 'installment', 'cashone'].some(
-        kw => lowerMsg.includes(kw)
-      )
+      const isLoanComparison = [
+        'loan',
+        'borrow',
+        'repayment',
+        'instalment',
+        'installment',
+        'cashone'
+      ].some(kw => lowerMsg.includes(kw))
 
       if (isLoanComparison) {
         // Build loan comparison context from all personal loan files
@@ -562,129 +631,133 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
           if (loanContextParts.length > 0) {
             context = sanitizeCtx(loanContextParts.join('\n\n---\n\n'))
             docSources = loanFiles.map(f => `personal-loans/${f}`)
-            console.log(`  [retrieval] loan comparison → ${loanFiles.length} loan doc(s) as context`)
+            console.log(
+              `  [retrieval] loan comparison → ${loanFiles.length} loan doc(s) as context`
+            )
           }
         } catch (loanReadErr) {
-          console.warn(`  [retrieval] could not read loans dir for comparison: ${loanReadErr.message} — falling through`)
+          console.warn(
+            `  [retrieval] could not read loans dir for comparison: ${loanReadErr.message} — falling through`
+          )
         }
       }
 
       if (!context) {
-      // Credit card comparison — use overview.md for per-card feature summaries
-      const overviewSrc = 'credit-cards/overview.md'
-      try {
-        const overviewRaw = readFileSync(join(projectRoot, 'docs', overviewSrc), 'utf8')
+        // Credit card comparison — use overview.md for per-card feature summaries
+        const overviewSrc = 'credit-cards/overview.md'
+        try {
+          const overviewRaw = readFileSync(join(projectRoot, 'docs', overviewSrc), 'utf8')
 
-        // Extract per-card bullet points from the "## Available Credit Cards" section
-        const sectionStart = overviewRaw.indexOf('## Available Credit Cards')
-        const sectionEnd = overviewRaw.indexOf('\n## ', sectionStart + 1)
-        const bulletSection =
-          sectionStart !== -1
-            ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
-            : overviewRaw
+          // Extract per-card bullet points from the "## Available Credit Cards" section
+          const sectionStart = overviewRaw.indexOf('## Available Credit Cards')
+          const sectionEnd = overviewRaw.indexOf('\n## ', sectionStart + 1)
+          const bulletSection =
+            sectionStart !== -1
+              ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
+              : overviewRaw
 
-        // Each card is a markdown bullet starting with "- **Card Name**"
-        const cardBullets = bulletSection.match(/^- \*\*[^*]+\*\*.+$/gm) || []
+          // Each card is a markdown bullet starting with "- **Card Name**"
+          const cardBullets = bulletSection.match(/^- \*\*[^*]+\*\*.+$/gm) || []
 
-        // Extract feature keywords from the query (strip common stop words)
-        const STOP_WORDS = new Set([
-          'what',
-          'which',
-          'card',
-          'cards',
-          'come',
-          'with',
-          'offer',
-          'have',
-          'does',
-          'do',
-          'you',
-          'the',
-          'that',
-          'for',
-          'are',
-          'give',
-          'best',
-          'most',
-          'any',
-          'can',
-          'include',
-          'provide',
-          'support',
-          'me',
-          'tell',
-          'show',
-          'list',
-          'get',
-          'is',
-          'a',
-          'an',
-          'and',
-          'or',
-          'of',
-          'in',
-          'on',
-          'to',
-          'by',
-          'from',
-          'into',
-          // Follow-up / filler words that appear in "which ones are good for X?" queries
-          'ones',
-          'one',
-          'good',
-          'great',
-          'ideal',
-          'perfect',
-          'better',
-          'nice',
-          'well'
-        ])
-        const featureWords = lowerMsg
-          .replace(/[^a-z\s]/g, '')
-          .split(/\s+/)
-          .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+          // Extract feature keywords from the query (strip common stop words)
+          const STOP_WORDS = new Set([
+            'what',
+            'which',
+            'card',
+            'cards',
+            'come',
+            'with',
+            'offer',
+            'have',
+            'does',
+            'do',
+            'you',
+            'the',
+            'that',
+            'for',
+            'are',
+            'give',
+            'best',
+            'most',
+            'any',
+            'can',
+            'include',
+            'provide',
+            'support',
+            'me',
+            'tell',
+            'show',
+            'list',
+            'get',
+            'is',
+            'a',
+            'an',
+            'and',
+            'or',
+            'of',
+            'in',
+            'on',
+            'to',
+            'by',
+            'from',
+            'into',
+            // Follow-up / filler words that appear in "which ones are good for X?" queries
+            'ones',
+            'one',
+            'good',
+            'great',
+            'ideal',
+            'perfect',
+            'better',
+            'nice',
+            'well'
+          ])
+          const featureWords = lowerMsg
+            .replace(/[^a-z\s]/g, '')
+            .split(/\s+/)
+            .filter(w => w.length > 2 && !STOP_WORDS.has(w))
 
-        // Score each bullet by number of feature word hits
-        const scoredBullets = cardBullets
-          .map(bullet => ({
-            bullet,
-            score: featureWords.filter(w => bullet.toLowerCase().includes(w)).length
-          }))
-          .filter(x => x.score > 0)
-          .sort((a, b) => b.score - a.score)
+          // Score each bullet by number of feature word hits
+          const scoredBullets = cardBullets
+            .map(bullet => ({
+              bullet,
+              score: featureWords.filter(w => bullet.toLowerCase().includes(w)).length
+            }))
+            .filter(x => x.score > 0)
+            .sort((a, b) => b.score - a.score)
 
-        // Only return bullets at the highest score to avoid false positives.
-        // Example: "cashback on dining" has feature words [cashback, dining].
-        // Citi (score 2) and OCBC (score 2) beat HSBC (score 1, only matches "dining").
-        const maxScore = scoredBullets[0]?.score ?? 0
-        const topBullets = scoredBullets.filter(x => x.score === maxScore)
+          // Only return bullets at the highest score to avoid false positives.
+          // Example: "cashback on dining" has feature words [cashback, dining].
+          // Citi (score 2) and OCBC (score 2) beat HSBC (score 1, only matches "dining").
+          const maxScore = scoredBullets[0]?.score ?? 0
+          const topBullets = scoredBullets.filter(x => x.score === maxScore)
 
-        if (topBullets.length > 0) {
-          const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
-          const intro =
-            topBullets.length === 1
-              ? 'One card matches your query:'
-              : `${topBullets.length} cards match your query:`
-          const directAnswer = `${intro}\n\n${matchedCards}`
-          console.log(
-            `  [retrieval] comparison match → ${topBullets.length} card(s) from overview.md`
-          )
+          if (topBullets.length > 0) {
+            const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
+            const intro =
+              topBullets.length === 1
+                ? 'One card matches your query:'
+                : `${topBullets.length} cards match your query:`
+            const directAnswer = `${intro}\n\n${matchedCards}`
+            console.log(
+              `  [retrieval] comparison match → ${topBullets.length} card(s) from overview.md`
+            )
+            docSources = [overviewSrc]
+            const memory = getSessionMemory(sessionId)
+            if (streaming) return { directReply: directAnswer, memory, sources: docSources }
+            await memory.saveContext({ input: message }, { output: directAnswer })
+            return { reply: directAnswer, sources: docSources }
+          }
+
+          // No keyword match — fall back to LLM with full overview.md as context
+          context = sanitizeCtx(overviewRaw)
           docSources = [overviewSrc]
-          const memory = getSessionMemory(sessionId)
-          if (streaming) return { directReply: directAnswer, memory, sources: docSources }
-          await memory.saveContext({ input: message }, { output: directAnswer })
-          return { reply: directAnswer, sources: docSources }
+          console.log(
+            `  [retrieval] comparison query → no keyword match, LLM fallback with overview.md`
+          )
+        } catch (e) {
+          console.warn(`  [retrieval] could not read overview.md: ${e.message} — falling through`)
         }
-
-        // No keyword match — fall back to LLM with full overview.md as context
-        context = sanitizeCtx(overviewRaw)
-        docSources = [overviewSrc]
-        console.log(
-          `  [retrieval] comparison query → no keyword match, LLM fallback with overview.md`
-        )
-      } catch (e) {
-        console.warn(`  [retrieval] could not read overview.md: ${e.message} — falling through`)
-      }
       } // end if (!context) credit-card comparison branch
     } // end if (isComparisonQuery)
 
@@ -706,7 +779,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       'dbs live fresh': 'credit-cards/dbs-live-fresh.md',
       'live fresh': 'credit-cards/dbs-live-fresh.md',
       ocbc: 'credit-cards/ocbc-365.md',
-      '365': 'credit-cards/ocbc-365.md',
+      365: 'credit-cards/ocbc-365.md',
       uob: 'credit-cards/uob-krisflyer.md',
       krisflyer: 'credit-cards/uob-krisflyer.md',
       // Personal loans
@@ -817,7 +890,8 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
                 const feeVal = matchedLine.slice(colonIdx + 2).trim()
                 // Reconstruct a human-friendly product name from the filename (strip folder prefix)
                 const cardDisplayName = targetFile
-                  .split('/').pop() // Remove folder prefix (e.g. "credit-cards/")
+                  .split('/')
+                  .pop() // Remove folder prefix (e.g. "credit-cards/")
                   .replace('.md', '')
                   .split('-')
                   .map(w => w.charAt(0).toUpperCase() + w.slice(1))
@@ -935,8 +1009,32 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     // Non-streaming: invoke LLM with the fully-grounded prompt
     // Layer 2 (temperature=0) is already set on the llm instance passed in
     console.log('Generating response with LLM...')
-    const rawReply = await llm.invoke(fullPrompt)
-    let reply = typeof rawReply === 'string' ? rawReply : (rawReply.content ?? String(rawReply))
+
+    // Use prompt caching for Claude to reduce costs by 90%
+    let rawReply
+    if (LLM_PROVIDER === 'claude' && CLAUDE_ENABLE_CACHING) {
+      // Split the grounded prompt into system (cacheable) and user parts
+      const systemPart = fullPrompt.substring(0, fullPrompt.lastIndexOf('Customer:'))
+      const userPart = fullPrompt.substring(fullPrompt.lastIndexOf('Customer:'))
+
+      // Use cache_control to cache the system prompt + context
+      rawReply = await llm.invoke([
+        new SystemMessage({
+          content: [
+            {
+              type: 'text',
+              text: systemPart,
+              cache_control: { type: 'ephemeral' } // Cache this for 5 minutes
+            }
+          ]
+        }),
+        new HumanMessage(userPart)
+      ])
+    } else {
+      rawReply = await llm.invoke(fullPrompt)
+    }
+
+    const reply = typeof rawReply === 'string' ? rawReply : (rawReply.content ?? String(rawReply))
 
     console.log(`Response generated successfully (${reply.length} chars)`)
 
@@ -1004,13 +1102,8 @@ async function handleOffTopicIntent(sessionId, message) {
  * @returns {Promise<{reply: string, intent: string}|{prompt: string, memory: BufferMemory, intent: string}>}
  */
 async function processChat(sessionId, message, streaming) {
-  // Initialize LLM
-  const llm = new ChatOllama({
-    model: OLLAMA_MODEL,
-    baseUrl: OLLAMA_BASE_URL,
-    temperature: LLM_TEMPERATURE,
-    timeout: LLM_TIMEOUT_MS
-  })
+  // Initialize LLM based on provider
+  const llm = createLLM()
 
   // Step 1: Keyword pre-check for escalation — runs before the LLM classifier.
   // Small models (1B) are unreliable for safety-critical routing; keywords are deterministic.

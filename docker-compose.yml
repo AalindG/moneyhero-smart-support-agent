@@ -14,7 +14,17 @@ services:
       - ./docs:/app/docs
     environment:
       - PORT=3001
+      # LLM Provider Configuration
+      - LLM_PROVIDER=${LLM_PROVIDER:-claude}
+      # Claude API (primary)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-3-5-haiku-20241022}
+      - CLAUDE_ENABLE_CACHING=${CLAUDE_ENABLE_CACHING:-true}
+      # Ollama (for embeddings + fallback)
       - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:1b}
+      - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      # Database
       - OLLAMA_MODEL=llama3.2:1b
       - OLLAMA_CLASSIFIER_MODEL=llama3.2:1b
       - OLLAMA_EMBED_MODEL=nomic-embed-text
