@@ -2,9 +2,8 @@ import dotenv from 'dotenv'
 import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama'
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib'
 import { BufferMemory } from 'langchain/memory'
-import { ChatPromptTemplate } from '@langchain/core/prompts'
-import { StringOutputParser } from '@langchain/core/output_parsers'
 import { HumanMessage, AIMessage } from '@langchain/core/messages'
+import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { loadVectorstoreMetadata } from './config/embeddingValidation.js'
@@ -34,29 +33,12 @@ const LLM_TEMPERATURE = 0 // Factual financial Q&A — zero randomness for accur
 // Layer 1: Customer-friendly RAG prompt that prevents hallucination
 // Uses <knowledge_base> XML delimiters to clearly separate retrieved context from instructions,
 // preventing the model from confusing retrieved content with system instructions.
-const RAG_SYSTEM_PROMPT = `You are a knowledgeable financial support agent for MoneyHero, a comparison platform for credit cards and personal loans in Singapore.
+const RAG_SYSTEM_PROMPT = `Use ONLY the information below to answer. Do not add anything from your training data.
 
-Answer the customer's question using ONLY the product information in the knowledge base below.
-
-<knowledge_base>
 {context}
-</knowledge_base>
 
-Guidelines:
-- Answer naturally and directly — never reference "the knowledge base", "the context", "documents", or use any source meta-language
-- Provide specific details: product names, rates, fees, and eligibility criteria exactly as stated in the knowledge base
-- When comparing products, clearly list their key differences
-- Present options neutrally — do not assume what the customer wants unless they have said so
-- Always remind the customer to verify current rates, fees, and eligibility directly with the financial institution before applying
-- Never invent, infer, or assume product details not explicitly stated in the knowledge base
-- Never guarantee approval or promise outcomes — use phrases like "may be eligible" or "typically requires"
-
-If the knowledge base contains partial information, use it to give the most complete answer possible — never refuse to answer just because the context is incomplete.
-Only if the knowledge base contains NO information at all relevant to the question, respond with:
-"I don't have detailed information about that. Would you like me to connect you with one of our advisors?"
-
-Customer: {question}
-Agent:`
+Q: {question}
+A:`
 
 // Global state
 let vectorStore = null
@@ -144,74 +126,89 @@ function getSessionMemory(sessionId) {
  * @returns {Promise<{intent: string, confidence: number}>} Intent and confidence (0.0 to 1.0)
  */
 async function classifyIntent(message) {
-  const classifierLLM = new ChatOllama({
-    model: OLLAMA_CLASSIFIER_MODEL,
-    baseUrl: OLLAMA_BASE_URL,
-    temperature: 0.0,
-    timeout: 10000 // 10 second timeout for classification only
-  })
+  const classifyStart = Date.now()
 
-  const classificationPrompt = ChatPromptTemplate.fromMessages([
-    [
-      'system',
-      `You are an intent classifier for a financial products support agent.
+  // Use Ollama /api/generate (completion mode) with a few-shot prompt ending in " →"
+  // so the model fills in exactly one word instead of answering the user's question.
+  // Chat format confuses 1B models — they answer the user instead of classifying.
+  const classifyPrompt = `Classify the message. Output ONLY one word: answer, escalate, or off_topic.
 
-Classify the user's message into ONE of these categories:
+answer     = question about credit cards or personal loans
+escalate   = wants to speak to a human agent
+off_topic  = anything else (weather, cooking, stocks, mutual funds, insurance, crypto, etc.)
 
-1. "answer" - ANY question about credit cards or loans, including features, rates, fees, eligibility, applications, recommendations, comparisons, and listings
-2. "escalate" - User EXPLICITLY asks to speak to a human, requests a callback, or expresses frustration with the service
-3. "off_topic" - Questions with NO relation to financial products (weather, sports, cooking, general knowledge, coding, etc.)
+"What are the benefits of the HSBC Revolution card?" → answer
+"List all available credit cards" → answer
+"What credit cards do you offer?" → answer
+"Compare DBS and OCBC cards" → answer
+"How do I apply for a personal loan?" → answer
+"I need to speak to a human agent" → escalate
+"Let me talk to someone please" → escalate
+"What's the weather today?" → off_topic
+"What mutual funds should I invest in?" → off_topic
+"Should I buy Bitcoin?" → off_topic
+"What insurance plan is best?" → off_topic
 
-Respond with ONLY the intent category: answer, escalate, or off_topic
-
-Examples:
-User: "What are the benefits of the HSBC Revolution card?" → answer
-User: "Which card is best for travel?" → answer
-User: "What cards are good for cashback?" → answer
-User: "List all available credit cards" → answer
-User: "Compare DBS and OCBC cards" → answer
-User: "How do I apply for a personal loan?" → answer
-User: "I need to speak to a human agent" → escalate
-User: "Let me talk to someone please" → escalate
-User: "This is taking too long, I want to talk to someone" → escalate
-User: "What's the weather today?" → off_topic
-User: "Tell me a joke" → off_topic
-User: "Write me a Python script" → off_topic`
-    ],
-    ['user', '{message}']
-  ])
-
-  const chain = classificationPrompt.pipe(classifierLLM).pipe(new StringOutputParser())
+"${message.replace(/"/g, "'")}" →`
 
   try {
-    const result = await chain.invoke({ message })
-    const normalized = result.trim().toLowerCase()
+    // Use streaming so the first token arrives as soon as the model starts generating.
+    // Non-streaming (stream: false) waits for full generation before returning, which is
+    // slower on a cold model. We abort the stream after the first token we care about.
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 45000)
 
-    // Parse intent and estimate confidence based on response clarity
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_CLASSIFIER_MODEL,
+        prompt: classifyPrompt,
+        stream: true,
+        options: { temperature: 0.0, num_predict: 5 }
+      }),
+      signal: controller.signal
+    })
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+    // Read just enough tokens to identify the intent word
+    const reader = response.body.getReader()
+    const dec = new TextDecoder()
+    let raw = ''
+    while (raw.length < 20) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = dec.decode(value, { stream: true })
+      for (const line of chunk.split('\n').filter(Boolean)) {
+        try { raw += (JSON.parse(line).response || '') } catch { /* skip */ }
+      }
+    }
+    reader.cancel()
+    clearTimeout(timeoutId)
+    raw = raw.trim().toLowerCase()
+
     let intent = 'uncertain'
     let confidence = 0.5
 
-    if (normalized.includes('escalate')) {
+    if (raw.startsWith('escalate')) {
       intent = 'escalate'
-      // High confidence for explicit escalations
-      confidence = normalized.match(/^escalate\s*$/i) ? 0.95 : 0.85
-    } else if (normalized.includes('off_topic')) {
+      confidence = 0.95
+    } else if (raw.startsWith('off_topic') || raw.startsWith('off-topic')) {
       intent = 'off_topic'
-      confidence = normalized.match(/^off_topic\s*$/i) ? 0.9 : 0.75
-    } else if (normalized.includes('answer')) {
+      confidence = 0.9
+    } else if (raw.startsWith('answer')) {
       intent = 'answer'
-      confidence = normalized.match(/^answer\s*$/i) ? 0.9 : 0.75
+      confidence = 0.9
     } else {
-      // Unexpected output - low confidence
-      console.warn(`Classifier returned unexpected value: "${result}"`)
+      console.warn(`Classifier unexpected output: "${raw}"`)
       confidence = 0.3
     }
 
-    console.log(`Intent: ${intent} (confidence: ${confidence.toFixed(2)})`)
-
+    console.log(`  [classify] intent=${intent} confidence=${confidence.toFixed(2)} raw="${raw}" (${Date.now() - classifyStart}ms)`)
     return { intent, confidence }
   } catch (error) {
-    console.error('Intent classification error:', error.message)
+    console.error(`  [classify] error: ${error.message} (${Date.now() - classifyStart}ms)`)
     return { intent: 'uncertain', confidence: 0.0 }
   }
 }
@@ -267,8 +264,10 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     // ── LAYER 3: Retrieval gate ──────────────────────────────────────────────
     // HNSWLib returns cosine DISTANCE: lower = more similar (0 = identical, 1 = orthogonal).
     // Fetch 20 candidates so the score filter has enough docs to choose from.
-    console.log('Retrieving relevant documents...')
+    console.log('  [retrieval] searching vectorstore...')
+    const retrievalStart = Date.now()
     const candidateDocs = await store.similaritySearchWithScore(message, 20)
+    console.log(`  [retrieval] got ${candidateDocs.length} candidates in ${Date.now() - retrievalStart}ms`)
 
     // Gate 1: vectorstore empty or retrieval failed completely
     if (candidateDocs.length === 0) {
@@ -289,17 +288,18 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     const filteredDocs = candidateDocs.filter(([, score]) => score <= MAX_DISTANCE_THRESHOLD)
 
     // ── LAYER 4: Source logging ───────────────────────────────────────────────
-    console.log(`Query: "${message}"`)
+    console.log(`  [retrieval] query: "${message.slice(0, 80)}"`)
     console.log(
-      'Candidate docs:',
-      candidateDocs.map(
+      `  [retrieval] candidates (top 10):`,
+      candidateDocs.slice(0, 10).map(
         ([doc, score]) =>
-          `${doc.metadata?.source?.split('/').pop() || 'unknown'} (score: ${score.toFixed(3)})`
-      )
+          `${doc.metadata?.source?.split('/').pop() || 'unknown'}(${score.toFixed(3)})`
+      ).join(', ')
     )
+    console.log(`  [retrieval] score filter ≤${MAX_DISTANCE_THRESHOLD}: ${filteredDocs.length}/${candidateDocs.length} docs passed`)
 
     if (filteredDocs.length === 0) {
-      console.log(`No documents within distance threshold ${MAX_DISTANCE_THRESHOLD} — skipping LLM`)
+      console.log(`  [retrieval] ALL docs filtered out — no relevant content found`)
       if (streaming) throw new Error('NO_RELEVANT_DOCS')
       return {
         reply:
@@ -319,11 +319,11 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       : filteredDocs
 
     console.log(
-      `Category filter: detected="${queryCategory ?? 'none'}" kept ${categoryFilteredDocs.length}/${filteredDocs.length} docs`
+      `  [retrieval] category filter: detected="${queryCategory ?? 'none'}" kept ${categoryFilteredDocs.length}/${filteredDocs.length} docs`
     )
 
     if (categoryFilteredDocs.length === 0) {
-      console.log(`Category filter removed all results — no ${queryCategory} docs in threshold range`)
+      console.log(`  [retrieval] category filter removed all results — no ${queryCategory} docs in range`)
       if (streaming) throw new Error('NO_RELEVANT_DOCS')
       return {
         reply:
@@ -332,27 +332,199 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       }
     }
 
-    // Take top RETRIEVAL_K results (already sorted closest-first by HNSWLib)
-    const relevantDocs = categoryFilteredDocs.slice(0, RETRIEVAL_K).map(([doc]) => doc)
+    // Deduplicate by source file — keep only the closest chunk per file.
+    // Prevents one file (e.g. dbs-live-fresh.md) from dominating context with multiple chunks
+    // and biasing the LLM toward that product when listing all products.
+    const seenSources = new Set()
+    const dedupedDocs = categoryFilteredDocs.filter(([doc]) => {
+      const src = doc.metadata?.source || 'unknown'
+      if (seenSources.has(src)) return false
+      seenSources.add(src)
+      return true
+    })
 
-    // Extract source filenames for grounding log and return value
-    const docSources = relevantDocs.map(doc => doc.metadata?.source || 'unknown')
-    console.log(`Sources used (${relevantDocs.length} doc(s)): [${docSources.join(', ')}]`)
+    // ── CATALOG QUERY SHORTCUT ──────────────────────────────────────────────
+    // For "list all products" type queries, if overview.md is the top retrieved doc,
+    // return its content directly without LLM generation. A 1B model cannot reliably
+    // enumerate all 5 products from context; returning the source doc is 100% accurate.
+    const LISTING_QUERY_PATTERNS = [
+      /what (credit )?cards? (do you|does moneyHero|are|you) (offer|have|provide|available)/i,
+      /which cards? (do you|does moneyHero|are|you)/i,
+      /list (all |the )?(credit )?cards?/i,
+      /tell me (about |all )?((the )?cards?|products?)/i,
+      /what products? (do you|are)/i,
+      /available cards?/i,
+      /cards? (you offer|you have|available)/i
+    ]
+    const isListingQuery = LISTING_QUERY_PATTERNS.some(p => p.test(message))
+    const topDoc = dedupedDocs[0]?.[0]
+    const topDocIsOverview = topDoc?.metadata?.source?.endsWith('overview.md')
 
-    // Build context string — sanitize each chunk to prevent doc-injection attacks
-    const sanitizeContext = text =>
-      text
-        .replace(/<\/?(?:user|assistant|system)>/gi, '')
-        .replace(/\{context\}|\{question\}/gi, '')
-        .replace(/IMPORTANT RULES/gi, '')
-    const context = relevantDocs.map(doc => sanitizeContext(doc.pageContent)).join('\n\n---\n\n')
+    if (isListingQuery && topDocIsOverview) {
+      console.log(`  [retrieval] catalog query + overview.md top doc — reading file directly`)
+      // Read overview.md from disk instead of stitching vector store chunks.
+      // Chunks for individual card bullets may score beyond the top-20 similarity results,
+      // so the vector store path is unreliable for complete catalog listings.
+      const overviewSrc = topDoc.metadata?.source  // e.g. "credit-cards/overview.md"
+      const overviewFilePath = join(projectRoot, 'docs', overviewSrc)
+      let overviewContent
+      try {
+        overviewContent = readFileSync(overviewFilePath, 'utf8')
+          .replace(/^#[^\n]*\n/m, '')  // Remove leading H1
+          .trim()
+      } catch (readErr) {
+        console.warn(`  [retrieval] could not read ${overviewFilePath}: ${readErr.message} — falling through to LLM`)
+        overviewContent = null
+      }
+
+      if (overviewContent) {
+        const memory = getSessionMemory(sessionId)
+        if (streaming) {
+          return { directReply: overviewContent, memory, sources: [overviewSrc] }
+        }
+        await memory.saveContext({ input: message }, { output: overviewContent })
+        return { reply: overviewContent, sources: [overviewSrc] }
+      }
+      // Fall through to LLM if file read failed
+    }
+
+    // For specific (non-listing) queries, use targeted doc selection:
+    // 1. If a known card/loan name is in the message, prioritise that product's doc.
+    // 2. Otherwise fall back to the top-scored deduplicated doc.
+    // A 1B model answers correctly with a short, focused context (~500 chars);
+    // giving it 5 docs (~2600 chars) causes it to hallucinate from training data.
+    const CARD_DOC_MAP = {
+      hsbc: 'hsbc-revolution.md', revolution: 'hsbc-revolution.md',
+      citi: 'citi-cashback-plus.md', 'cashback plus': 'citi-cashback-plus.md',
+      'dbs live fresh': 'dbs-live-fresh.md', 'live fresh': 'dbs-live-fresh.md',
+      dbs: 'dbs-live-fresh.md',
+      ocbc: 'ocbc-365.md', '365': 'ocbc-365.md',
+      uob: 'uob-krisflyer.md', krisflyer: 'uob-krisflyer.md',
+      'standard chartered': 'standard-chartered-cashone.md', cashone: 'standard-chartered-cashone.md',
+    }
+    const lowerMsg = message.toLowerCase()
+    const targetFile = Object.entries(CARD_DOC_MAP).find(([kw]) => lowerMsg.includes(kw))?.[1]
+
+    // For card-specific queries, read the target card's file directly from disk.
+    // Fee-table chunks are markdown tables that embed poorly and often fall outside
+    // the top-20 similarity results — disk read guarantees the full card content.
+    let context
+    let docSources
+    if (targetFile) {
+      const cardSrc = `credit-cards/${targetFile}`
+      const cardFilePath = join(projectRoot, 'docs', cardSrc)
+      try {
+        const rawCard = readFileSync(cardFilePath, 'utf8')
+
+        // For 1B models, focused context beats full doc:
+        // Extract only the section matching the query type so the relevant
+        // value (e.g. S$150 in a fee table) isn't buried under prose.
+        const qLower = message.toLowerCase()
+        const SECTION_KEYWORDS = [
+          { keywords: ['fee', 'charge', 'cost', 'annual', 'interest', 'late payment', 'cash advance'], heading: '## Fees' },
+          { keywords: ['eligib', 'income', 'qualify', 'requirement', 'who can apply'], heading: '## Eligibility' },
+          { keywords: ['apply', 'application', 'how to get', 'sign up'], heading: '## How to Apply' },
+          { keywords: ['benefit', 'reward', 'cashback', 'miles', 'point', 'perk'], heading: '## Key Benefits' },
+        ]
+        const matchedSection = SECTION_KEYWORDS.find(({ keywords }) =>
+          keywords.some(kw => qLower.includes(kw))
+        )
+
+        let cardContent = rawCard
+        if (matchedSection) {
+          // Extract just the matched section
+          const sectionStart = rawCard.indexOf(matchedSection.heading)
+          if (sectionStart !== -1) {
+            const nextHeading = rawCard.indexOf('\n## ', sectionStart + matchedSection.heading.length)
+            cardContent = nextHeading !== -1
+              ? rawCard.slice(sectionStart, nextHeading).trim()
+              : rawCard.slice(sectionStart).trim()
+
+            // Convert markdown table rows to plain "Key: Value" lines so the 1B model
+            // can extract specific amounts without struggling with | pipe syntax.
+            cardContent = cardContent.replace(
+              /^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/gm,
+              (_, key, val) => {
+                const k = key.trim()
+                const v = val.trim()
+                // Skip header/divider rows (empty or dash-only values)
+                if (!k || /^[-:]+$/.test(v)) return ''
+                return `${k}: ${v}`
+              }
+            ).replace(/\n{3,}/g, '\n\n').trim()
+
+            // For the Fees section: try to find the exact line matching the query
+            // and return it as a directReply, bypassing the LLM.
+            // 1B models reliably drop specific amounts from table cells even in plain-text.
+            if (matchedSection.heading === '## Fees') {
+              // Skip header/divider rows: "Fee Type: Amount", blank values, or dash-only values
+              const lines = cardContent.split('\n').filter(l => {
+                if (!l.includes(': ')) return false
+                const [k, v] = l.split(': ')
+                return k.trim().toLowerCase() !== 'fee type' && v && v.trim().toLowerCase() !== 'amount'
+              })
+              const qWords = qLower.replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2)
+              // Score each line by how many query words it contains — pick the best match
+              const scored = lines.map(l => ({
+                line: l,
+                score: qWords.filter(w => l.toLowerCase().includes(w)).length
+              })).filter(x => x.score > 0).sort((a, b) => b.score - a.score)
+              const matchedLine = scored[0]?.line
+              if (matchedLine) {
+                const colonIdx = matchedLine.indexOf(': ')
+                const feeKey = matchedLine.slice(0, colonIdx).trim()
+                const feeVal = matchedLine.slice(colonIdx + 2).trim()
+                // Reconstruct a human-friendly card name from the filename
+                const cardDisplayName = targetFile.replace('.md', '').split('-')
+                  .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+                  .replace('Hsbc', 'HSBC').replace('Dbs', 'DBS').replace('Uob', 'UOB')
+                  .replace('Ocbc', 'OCBC')
+                const directAnswer = `The ${feeKey} for the ${cardDisplayName} is ${feeVal}.`
+                console.log(`  [retrieval] fee line match → direct answer: "${directAnswer}"`)
+                docSources = [cardSrc]
+                const memory = getSessionMemory(sessionId)
+                if (streaming) return { directReply: directAnswer, memory, sources: docSources }
+                await memory.saveContext({ input: message }, { output: directAnswer })
+                return { reply: directAnswer, sources: docSources }
+              }
+            }
+
+            console.log(`  [retrieval] extracted section "${matchedSection.heading}" (${cardContent.length} chars, table→plaintext)`)
+          }
+        }
+
+        const sanitize = text =>
+          text
+            .replace(/<\/?(?:user|assistant|system)>/gi, '')
+            .replace(/\{context\}|\{question\}/gi, '')
+            .replace(/IMPORTANT RULES/gi, '')
+        context = sanitize(cardContent)
+        docSources = [cardSrc]
+        console.log(`  [retrieval] card-name routing → ${targetFile} (disk read, ${context.length} chars)`)
+      } catch (readErr) {
+        console.warn(`  [retrieval] could not read ${cardFilePath}: ${readErr.message} — falling back to vector store`)
+      }
+    }
+
+    if (!context) {
+      // Fall back to top-1 deduplicated doc from vector store
+      const relevantDocs = dedupedDocs.slice(0, 1).map(([doc]) => doc)
+      docSources = relevantDocs.map(doc => doc.metadata?.source || 'unknown')
+      console.log(`  [retrieval] using top-scored doc: [${docSources.map(s => s.split('/').pop()).join(', ')}]`)
+
+      const sanitizeContext = text =>
+        text
+          .replace(/<\/?(?:user|assistant|system)>/gi, '')
+          .replace(/\{context\}|\{question\}/gi, '')
+          .replace(/IMPORTANT RULES/gi, '')
+      context = relevantDocs.map(doc => sanitizeContext(doc.pageContent)).join('\n\n---\n\n')
+    }
 
     // Get conversation history
-    console.log('Loading conversation history...')
     const memory = getSessionMemory(sessionId)
     const historyMessages = await memory.chatHistory.getMessages()
     const cappedHistory = historyMessages.slice(-MAX_HISTORY_MESSAGES)
-    console.log(`Loaded ${cappedHistory.length} history messages`)
+    console.log(`  [context] history: ${cappedHistory.length} msgs | context: ${context.length} chars`)
 
     // ── LAYER 1: Fill {context} and {question} in strict RAG prompt ──────────
     // Enhanced sanitization to prevent prompt injection attacks
@@ -376,15 +548,15 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     if (cappedHistory.length > 0) {
       const historyBlock = cappedHistory
         .map(msg => {
-          if (msg instanceof HumanMessage) return `Customer: ${sanitize(msg.content)}`
-          if (msg instanceof AIMessage) return `Agent: ${sanitize(msg.content)}`
+          if (msg instanceof HumanMessage) return `User: ${sanitize(msg.content)}`
+          if (msg instanceof AIMessage) return `Assistant: ${sanitize(msg.content)}`
           return ''
         })
         .filter(Boolean)
         .join('\n')
       fullPrompt = fullPrompt.replace(
-        'Customer: {question}',
-        `${historyBlock}\n\nCustomer: {question}`
+        'Q: {question}',
+        `${historyBlock}\n\nQ: {question}`
       )
     }
 
@@ -493,17 +665,56 @@ async function processChat(sessionId, message, streaming) {
     return { reply: escReply, intent: 'escalate', sources: [] }
   }
 
-  // Step 2: Classify intent via LLM
+  // Step 2a: Keyword pre-check for financial product queries — deterministic and fast.
+  // The 1B LLM is unreliable for these clear-signal cases; keywords are exact matches.
+  const ANSWER_KEYWORDS = [
+    'credit card', 'debit card', 'annual fee', 'cashback', 'cash back',
+    'rewards', 'miles', 'krisflyer', 'kris flyer', 'live fresh', 'revolution',
+    'cashback plus', '365 card', 'ocbc 365', 'uob ', 'dbs ', 'hsbc', 'citi',
+    'standard chartered', 'personal loan', 'borrow', 'borrowing', 'repayment',
+    'installment', 'instalment', 'interest rate', 'cashone', 'cash one',
+    'apply for', 'eligibility', 'minimum income', 'annual income',
+    'what cards', 'which card', 'what loans', 'which loan',
+    'offers', 'available cards', 'available loans', 'card comparison',
+    'compare cards', 'compare loans', 'best card', 'best loan'
+  ]
+  const isFinancialQuery = ANSWER_KEYWORDS.some(kw => lowerMessage.includes(kw))
+  if (isFinancialQuery) {
+    console.log(`Financial keyword detected — skipping classifier, routing to answer`)
+    const result = await handleAnswerIntent(sessionId, message, llm, streaming)
+    if (streaming) return { ...result, intent: 'answer', confidence: 1.0 }
+    return { reply: result.reply, intent: 'answer', sources: result.sources, confidence: 1.0 }
+  }
+
+  // Step 2b: Keyword pre-check for clearly off-topic queries.
+  // Same reasoning as answer keywords — the 1B model misclassifies common finance-adjacent topics.
+  const OFF_TOPIC_KEYWORDS = [
+    'mutual fund', 'stock market', 'share market', 'equit', 'etf ',
+    'bitcoin', 'crypto', 'ethereum', 'nft', 'forex', 'fx trading',
+    'insurance', 'life cover', 'health plan',
+    'weather', 'cooking', 'recipe', 'sports', 'travel tip',
+    'invest in', 'should i buy', 'portfolio'
+  ]
+  const isOffTopic = OFF_TOPIC_KEYWORDS.some(kw => lowerMessage.includes(kw))
+  if (isOffTopic) {
+    console.log(`Off-topic keyword detected — skipping classifier, routing to off_topic`)
+    const offReply = await handleOffTopicIntent(sessionId, message)
+    return { reply: offReply, intent: 'off_topic', confidence: 1.0, sources: [] }
+  }
+
+  // Step 2c: Classify intent via LLM (for queries without clear keyword signals)
   console.log(`Classifying intent for session: ${sessionId}`)
   const { intent, confidence } = await classifyIntent(message)
   console.log(`Detected intent: ${intent} (confidence: ${confidence.toFixed(2)})`)
 
-  // Low confidence threshold - route to human for safety
+  // Low confidence (classifier timed out or returned unexpected output) — try RAG retrieval.
+  // The retrieval gate (score threshold) prevents hallucination even when intent is uncertain.
   const LOW_CONFIDENCE_THRESHOLD = 0.3
   if (confidence < LOW_CONFIDENCE_THRESHOLD) {
-    console.warn(`⚠️  Low confidence (${confidence.toFixed(2)}) - routing to human`)
-    const escReply = await handleEscalateIntent(sessionId, message)
-    return { reply: escReply, intent: 'escalate', sources: [], confidence }
+    console.warn(`⚠️  Low confidence (${confidence.toFixed(2)}) — attempting RAG retrieval as fallback`)
+    const result = await handleAnswerIntent(sessionId, message, llm, streaming)
+    if (streaming) return { ...result, intent: 'answer', confidence }
+    return { reply: result.reply, intent: 'answer', sources: result.sources, confidence }
   }
 
   let result
@@ -605,6 +816,36 @@ export async function chat(sessionId, message, streaming = false) {
     console.error('Chat error:', error.message)
     throw new Error(`Failed to process chat: ${error.message}`)
   }
+}
+
+/**
+ * Pre-warm the Ollama model so the first real request doesn't hit cold-start latency.
+ * Fires a minimal generate request and discards the result.
+ */
+async function warmupModel(model) {
+  const res = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, prompt: 'hi', stream: false, options: { num_predict: 1 } }),
+    signal: AbortSignal.timeout(90000)
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await res.json()
+}
+
+export async function warmup() {
+  const models = [...new Set([OLLAMA_CLASSIFIER_MODEL, OLLAMA_MODEL])]
+  console.log(`Warming up Ollama models: ${models.join(', ')}`)
+  for (const model of models) {
+    try {
+      const t = Date.now()
+      await warmupModel(model)
+      console.log(`  ${model} warm-up done (${Date.now() - t}ms)`)
+    } catch (err) {
+      console.warn(`  ${model} warm-up failed (non-fatal): ${err.message}`)
+    }
+  }
+  console.log('Ollama model warm-up complete')
 }
 
 /**
