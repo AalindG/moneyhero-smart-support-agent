@@ -410,9 +410,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     })
 
     // ── CATALOG QUERY SHORTCUT ──────────────────────────────────────────────
-    // For "list all products" type queries, if overview.md is the top retrieved doc,
-    // return its content directly without LLM generation. A 1B model cannot reliably
-    // enumerate all 5 products from context; returning the source doc is 100% accurate.
+    // For "list all products" type queries, read overview.md directly.
+    // A 1B model cannot reliably enumerate all 5 products from context;
+    // returning the source doc is 100% accurate.
     // NOTE: These patterns must be MORE SPECIFIC than comparison patterns to avoid false matches.
     //       "Which cards are good for X?" should NOT match listing, only "Which cards do you offer?"
     const LISTING_QUERY_PATTERNS = [
@@ -426,15 +426,11 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       /^what (are )?((your|the) )?cards?$/i
     ]
     const isListingQuery = LISTING_QUERY_PATTERNS.some(p => p.test(message))
-    const topDoc = dedupedDocs[0]?.[0]
-    const topDocIsOverview = topDoc?.metadata?.source?.endsWith('overview.md')
 
-    if (isListingQuery && topDocIsOverview) {
-      console.log(`  [retrieval] catalog query + overview.md top doc — reading file directly`)
-      // Read overview.md from disk instead of stitching vector store chunks.
-      // Chunks for individual card bullets may score beyond the top-20 similarity results,
-      // so the vector store path is unreliable for complete catalog listings.
-      const overviewSrc = topDoc.metadata?.source // e.g. "credit-cards/overview.md"
+    if (isListingQuery) {
+      console.log(`  [retrieval] catalog query detected — reading overview.md directly`)
+      // Read overview.md from disk instead of relying on vector store retrieval
+      const overviewSrc = 'credit-cards/overview.md'
       const overviewFilePath = join(projectRoot, 'docs', overviewSrc)
       let overviewContent
       try {
@@ -674,11 +670,12 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
           .filter(x => x.score > 0)
           .sort((a, b) => b.score - a.score)
 
-        // Only return bullets at the highest score to avoid false positives.
-        // Example: "cashback on dining" has feature words [cashback, dining].
-        // Citi (score 2) and OCBC (score 2) beat HSBC (score 1, only matches "dining").
+        // Return cards with score >= 50% of max score to include relevant matches
+        // Example: "cashback on dining" - if OCBC scores 4 (with restaurant, food synonyms)
+        //          and Citi scores 2 (cashback + dining only), both are relevant
         const maxScore = scoredBullets[0]?.score ?? 0
-        const topBullets = scoredBullets.filter(x => x.score === maxScore)
+        const scoreThreshold = Math.max(2, Math.floor(maxScore * 0.5)) // At least 2 to filter noise
+        const topBullets = scoredBullets.filter(x => x.score >= scoreThreshold)
 
         if (topBullets.length > 0) {
           const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
