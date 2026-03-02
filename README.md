@@ -1,108 +1,204 @@
-# MoneyHero Backend
+# MoneyHero Smart Support Agent
 
-RAG-powered customer support API. Answers questions about credit cards and personal loans using LangChain.js, Ollama, and intent-based routing with SSE streaming.
+RAG-powered customer support chatbot for credit cards and personal loans. Built with LangChain.js, Ollama (local LLMs), React, and Express.
 
-## Stack
+**Chat interface → http://localhost:3000**
+**Backend API → http://localhost:3001**
 
-| Layer        | Technology                            |
-| ------------ | ------------------------------------- |
-| Runtime      | Node.js (ESM) + Express               |
-| AI / RAG     | LangChain.js + Ollama (`llama3.2:1b`) |
-| Embeddings   | `nomic-embed-text` via Ollama         |
-| Vector store | HNSWLib (local)                       |
-| Database     | SQLite via `better-sqlite3`           |
-| Streaming    | Server-Sent Events                    |
+---
 
-## Setup
+## Quick Start
 
-### Docker (recommended)
+**Prerequisites:** Docker Desktop running on your machine. Nothing else required.
 
 ```bash
+git clone <repo-url>
+cd moneyhero-backend
 chmod +x scripts/setup.sh
 ./scripts/setup.sh
 ```
 
-Starts Ollama and backend, pulls models (~4 GB first run), runs ingestion.
+That's it. The script:
+1. Starts Ollama + backend + frontend via Docker Compose
+2. Pulls the AI models (`llama3.2:1b` for LLM, `nomic-embed-text` for embeddings) — ~2 GB, one-time only
+3. Runs document ingestion to build the vector store
+4. Confirms all services are healthy
 
-### Local
+**First run takes 5–10 minutes** (model download). Subsequent starts take ~30 seconds:
 
 ```bash
-cp .env.example .env
-npm install
-npm run ingest     # builds vectorstore/ from docs/
-npm start          # http://localhost:3001
+docker compose up -d
 ```
 
-Requires Ollama running locally (`ollama serve`).
+Open **http://localhost:3000** to use the chat interface.
 
-## Environment Variables
+---
 
-| Variable             | Default                  | Notes                           |
-| -------------------- | ------------------------ | ------------------------------- |
-| `PORT`               | `3001`                   |                                 |
-| `OLLAMA_BASE_URL`    | `http://localhost:11434` | `http://ollama:11434` in Docker |
-| `OLLAMA_MODEL`       | `llama3.2`               | Use `llama3.2:1b` in Docker     |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text`       |                                 |
-| `DB_PATH`            | `./data/moneyhero.db`    |                                 |
+## Stack
 
-## API
+| Layer        | Technology                                        |
+| ------------ | ------------------------------------------------- |
+| Chat UI      | React 18 + Tailwind CSS + Vite (served via nginx) |
+| API server   | Node.js (ESM) + Express                           |
+| AI / RAG     | LangChain.js + Ollama (`llama3.2:1b`)             |
+| Classifier   | `llama3.2:1b` (separate intent classifier)        |
+| Embeddings   | `nomic-embed-text` via Ollama                     |
+| Vector store | HNSWLib (local, file-based)                       |
+| Database     | SQLite via `better-sqlite3`                       |
+| Streaming    | Server-Sent Events (SSE)                          |
+| Infra        | Docker Compose (3 containers)                     |
+
+---
+
+## How It Works
+
+Every chat message goes through a deterministic pipeline before touching an LLM:
+
+```
+User message
+    │
+    ├─ Escalation keywords?  →  connect to human agent
+    ├─ Financial keywords?   →  skip classifier, go to RAG
+    ├─ Off-topic keywords?   →  polite redirect
+    │
+    └─ LLM intent classifier (llama3.2:1b, ~3s)
+           │
+           ├─ answer   →  RAG retrieval pipeline
+           ├─ escalate →  handoff message
+           └─ off_topic → redirect
+```
+
+The RAG pipeline has 5 layers before generating a response:
+1. **Catalog shortcut** — listing queries read the source file directly (100% accurate)
+2. **Loan shortcut** — loan catalog queries build from all `personal-loans/` docs directly
+3. **Comparison shortcut** — "which cards offer X?" scores card bullets by keyword match
+4. **Product routing** — specific product mentioned → read that product's doc from disk
+5. **Vector fallback** — semantic search with adaptive score threshold
+
+All responses stream word-by-word via SSE.
+
+---
+
+## API Endpoints
 
 | Method | Endpoint                  | Description                        |
 | ------ | ------------------------- | ---------------------------------- |
 | `POST` | `/api/session`            | Create session → `{ sessionId }`   |
 | `POST` | `/api/chat`               | Send message → SSE token stream    |
-| `POST` | `/api/escalate`           | Escalate to human → `{ ticketId }` |
+| `POST` | `/api/escalate`           | Log escalation → `{ ticketId }`    |
 | `GET`  | `/api/history/:sessionId` | Conversation history               |
 | `GET`  | `/health`                 | Health check                       |
 
-**Chat** streams SSE:
+### Chat SSE format
 
 ```
-data: {"token":"Hello"}
+POST /api/chat
+{ "sessionId": "abc", "message": "What cards offer cashback?" }
+
+data: {"token":"2"}
+data: {"token":" cards"}
+data: {"token":" match"}
+...
 data: [DONE]
 ```
 
-**Escalate** returns a daily ticket ID: `TKT-YYYYMMDD-NNN`
+### Escalate
+
+Returns a daily ticket ID: `TKT-YYYYMMDD-NNN`
+
+---
 
 ## Guardrails
 
-- Input validation: `sessionId` ≤ 100 chars, `message`/`reason` ≤ 2000 chars
-- Session existence check on all endpoints (404 if missing)
-- Rate limits: 100 req/15 min global, 20 req/min on `/api/chat`
-- Escalation cooldown: 10 min per session (429 if exceeded)
-- Message truncated at 1500 chars before LLM
-- LLM timeout: 30 s with safe fallback
-- Conversation history capped at 10 pairs
-- Vectorstore missing → safe fallback, no crash
-- Profanity check before any LLM call
+- **Input validation**: sessionId ≤ 100 chars, message ≤ 2000 chars
+- **Rate limiting**: 100 req/15 min global, 20 req/min on `/api/chat`
+- **Escalation cooldown**: 10 min per session (429 if exceeded)
+- **Session gate**: 404 if session not found on all endpoints
+- **LLM timeout**: 90 s with safe fallback response
+- **Profanity filter**: checked before any LLM call
+- **Output validation**: blocks prompt leakage patterns before sending to client
+- **Retrieval gate**: adaptive score threshold prevents irrelevant docs reaching the LLM
+- **Category filter**: credit card docs excluded from loan answers and vice versa
+- **History cap**: token-based (≈2000 tokens) to prevent context overflow
+- **Vectorstore missing**: safe fallback, no crash
 
-## Commands
+---
+
+## Environment Variables
+
+| Variable                  | Default                  | Notes                           |
+| ------------------------- | ------------------------ | ------------------------------- |
+| `PORT`                    | `3001`                   |                                 |
+| `OLLAMA_BASE_URL`         | `http://localhost:11434` | `http://ollama:11434` in Docker |
+| `OLLAMA_MODEL`            | `llama3.2:1b`            | Generation model                |
+| `OLLAMA_CLASSIFIER_MODEL` | `llama3.2:1b`            | Intent classifier               |
+| `OLLAMA_EMBED_MODEL`      | `nomic-embed-text`       | Embedding model                 |
+| `DB_PATH`                 | `./data/moneyhero.db`    |                                 |
+
+Copy `.env.example` to `.env` for local development.
+
+---
+
+## Local Development (without Docker)
+
+Requires [Ollama](https://ollama.com) installed and running locally.
 
 ```bash
-npm start          # production
-npm run dev        # nodemon watch mode
-npm run ingest     # rebuild vector store
-npm run lint       # ESLint
-npm run format     # Prettier
+# Terminal 1 — Ollama
+ollama pull llama3.2:1b
+ollama pull nomic-embed-text
+ollama serve
+
+# Terminal 2 — Backend
+cp .env.example .env
+npm install
+npm run ingest          # builds vectorstore/ from docs/ (~30s)
+npm start               # http://localhost:3001
+
+# Terminal 3 — Frontend
+cd frontend
+npm install
+npm run dev             # http://localhost:3000
 ```
+
+---
 
 ## Project Structure
 
 ```
 src/
-├── agent.js          # RAG pipeline, intent routing (answer/escalate/off_topic)
+├── agent.js          # RAG pipeline: retrieval, routing, LLM prompt
 ├── ingest.js         # Doc chunking → HNSWLib vector store
-├── index.js          # Express app, rate limiting, middleware
-├── config/           # Constants, DB init
-├── controllers/      # Request handlers
-├── models/           # SQLite queries
+├── index.js          # Express app, rate limiting, startup
+├── config/           # Constants, embedding validation
+├── controllers/      # Chat, escalation, history, session handlers
+├── middleware/        # Input validation, SSE, output validation
+├── models/           # SQLite queries (messages, escalations, sessions)
 ├── routes/           # Express routers
-├── middleware/       # Validation, SSE setup, error handling
-├── services/         # Ollama streaming
-└── utils/            # Structured logger
-docs/                 # Markdown source docs for RAG
-vectorstore/          # Generated — do not commit
+├── services/         # Ollama streaming service
+└── utils/            # Compliance, response validator, logger
+docs/
+├── credit-cards/     # Per-card markdown docs + overview.md
+├── personal-loans/   # Per-loan markdown docs
+└── faqs/             # General FAQ docs
+vectorstore/          # Generated by npm run ingest — do not commit
 data/                 # SQLite DB — do not commit
+frontend/             # React + Vite + Tailwind chat UI
 ```
 
-See [REFLECTION.md](REFLECTION.md) for a notes on how this was built.
+---
+
+## Commands
+
+```bash
+npm start             # production server
+npm run dev           # nodemon watch mode
+npm run ingest        # rebuild vector store from docs/
+npm test              # run all tests
+npm run lint          # ESLint
+npm run format        # Prettier
+```
+
+---
+
+See [REFLECTION.md](REFLECTION.md) for notes on how this was built with AI assistance.

@@ -37,7 +37,7 @@ services:
       dockerfile: Dockerfile
     container_name: moneyhero-frontend
     ports:
-      - '5713:5713'
+      - '3000:3000'
     depends_on:
       backend:
         condition: service_healthy

@@ -1,374 +1,239 @@
-# MoneyHero Backend - Architecture Documentation
+# MoneyHero Backend — Architecture Documentation
 
 ## Folder Structure
 
 ```
 src/
-├── config/                    # Configuration files
-│   ├── constants.js          # Application constants (validation, rate limits, etc.)
-│   └── database.js           # Database configuration and initialization
+├── agent.js                      # RAG pipeline: retrieval, routing, LLM prompt
+├── ingest.js                     # Doc chunking → HNSWLib vector store
+├── index.js                      # Express app entry point, rate limiting, startup
 │
-├── models/                    # Data models (Database layer)
-│   ├── session.model.js      # Session CRUD operations
-│   ├── message.model.js      # Message CRUD operations
-│   └── escalation.model.js   # Escalation CRUD operations
+├── config/
+│   ├── constants.js              # Shared constants (validation limits, rate limits, thresholds)
+│   ├── database.js               # SQLite connection, schema init, table creation
+│   └── embeddingValidation.js    # Embedding dimension sanity checks
 │
-├── controllers/               # Business logic handlers
-│   ├── session.controller.js # Session creation logic
-│   ├── chat.controller.js    # Chat message processing
-│   ├── escalation.controller.js # Escalation handling
-│   └── history.controller.js # History retrieval
+├── controllers/
+│   ├── chat.controller.js        # POST /api/chat — intent → RAG → SSE stream
+│   ├── escalation.controller.js  # POST /api/escalate — log + ticket
+│   ├── feedback.controller.js    # POST/GET /api/feedback, GET /api/analytics/:sessionId
+│   ├── history.controller.js     # GET /api/history/:sessionId
+│   └── session.controller.js     # POST /api/session
 │
-├── routes/                    # API route definitions
-│   ├── session.routes.js     # POST /api/session
-│   ├── chat.routes.js        # POST /api/chat
-│   ├── escalation.routes.js  # POST /api/escalate
-│   ├── history.routes.js     # GET /api/history/:sessionId
-│   └── index.js              # Route aggregator
+├── middleware/
+│   ├── errorHandler.js           # Global error handler + asyncHandler wrapper
+│   ├── outputValidation.js       # Blocks prompt-leakage patterns before SSE flush
+│   ├── sse.js                    # SSE response helpers (writeToken, writeDone)
+│   └── validation.js             # Input validation (sessionId ≤ 100, message ≤ 2000)
 │
-├── services/                  # Business logic and external integrations
-│   └── ollama.service.js     # Ollama API streaming service
+├── models/
+│   ├── analytics.model.js        # qa_analytics + quality_metrics CRUD
+│   ├── escalation.model.js       # escalations CRUD
+│   ├── feedback.model.js         # feedback CRUD
+│   ├── message.model.js          # messages CRUD
+│   └── session.model.js          # sessions CRUD
 │
-├── middleware/                # Express middleware
-│   ├── validation.js         # Input validation
-│   ├── errorHandler.js       # Error handling middleware
-│   └── sse.js                # Server-Sent Events setup
+├── routes/
+│   ├── index.js                  # Mounts all sub-routers under /api
+│   ├── analytics.routes.js       # GET /api/analytics/:sessionId
+│   ├── chat.routes.js            # POST /api/chat
+│   ├── escalation.routes.js      # POST /api/escalate
+│   ├── feedback.routes.js        # POST/GET /api/feedback
+│   ├── history.routes.js         # GET /api/history/:sessionId
+│   └── session.routes.js         # POST /api/session
 │
-├── utils/                     # Utility functions
-│   └── logger.js             # Structured logging
+├── services/
+│   └── ollama.service.js         # Ollama streaming wrapper (num_predict, temperature)
 │
-├── agent.js                   # RAG agent (RAG Engineer's domain)
-├── ingest.js                  # Document ingestion (RAG Engineer's domain)
-└── index.js                   # Main server entry point
+└── utils/
+    ├── compliance.js             # Profanity filter (checked before every LLM call)
+    ├── logger.js                 # Structured console logger
+    └── responseValidator.js      # Post-generation output checks
 ```
 
 ## Architecture Patterns
 
-### MVC Pattern
+### MVC + Service Layer
 
-The backend follows a clean MVC (Model-View-Controller) architecture:
-
-- **Models**: Data access layer (models/\*)
-- **Controllers**: Business logic layer (controllers/\*)
-- **Routes**: API layer (routes/\*)
+```
+Request
+  │
+  ├── Rate limiter (index.js)
+  ├── Input validation middleware
+  │
+  ▼
+Routes → Controllers → Models (SQLite)
+              │
+              ├── agent.chat()      ← RAG pipeline (agent.js)
+              └── ollama.service    ← LLM streaming
+                        │
+                        ▼
+                  Ollama (Docker)
+                  llama3.2:1b / nomic-embed-text
+```
 
 ### Separation of Concerns
 
-Each module has a single responsibility:
-
-1. **Models** - Database operations only
-2. **Controllers** - Request handling and business logic
-3. **Routes** - HTTP routing and middleware composition
-4. **Services** - External API integrations
-5. **Middleware** - Cross-cutting concerns (validation, errors, logging)
-
-### Module Organization
-
-Routes are organized by **purpose and feature**:
-
-- `/api/session` - Session management
-- `/api/chat` - Chat interactions
-- `/api/escalate` - Escalation handling
-- `/api/history` - History retrieval
+| Layer | Files | Responsibility |
+|---|---|---|
+| Routes | `routes/*.routes.js` | HTTP method + path → controller mapping |
+| Controllers | `controllers/*.controller.js` | Request orchestration, response formatting |
+| Models | `models/*.model.js` | SQLite queries only — no business logic |
+| Services | `services/ollama.service.js` | External API (Ollama) streaming |
+| Middleware | `middleware/` | Cross-cutting: validation, SSE, error handling, output filtering |
+| RAG | `agent.js` | All retrieval and generation logic — black box to the API layer |
 
 ## Request Flow
 
+### Chat Message (Full Path)
+
 ```
-Request → Middleware → Routes → Controllers → Models → Database
-                 ↓
-            Error Handler
-```
-
-### Example: Chat Message Flow
-
-1. **Client** sends POST to `/api/chat`
-2. **Rate Limiter** middleware checks request rate
-3. **Chat Route** receives request
-4. **Chat Controller**:
-   - Validates input (validation middleware)
-   - Checks session exists (session model)
-   - Calls RAG agent (agent.js)
-   - Streams response (ollama service)
-   - Saves messages (message model)
-5. **Response** streamed back via SSE
-
-## Key Design Decisions
-
-### 1. Constants Configuration
-
-All magic numbers extracted to `config/constants.js`:
-
-```javascript
-export const VALIDATION = {
-  MAX_SESSION_ID_LENGTH: 100,
-  MAX_MESSAGE_LENGTH: 2000
-}
-```
-
-### 2. Structured Logging
-
-Logger utility provides consistent logging:
-
-```javascript
-import * as logger from './utils/logger.js'
-logger.info('Server started', { port: 3001 })
-logger.error('Database error', error)
+POST /api/chat
+  │
+  ├─ Rate limiter (20 req/min per IP on /api/chat)
+  ├─ Input validation (sessionId, message length)
+  │
+  ▼
+chat.controller.js
+  ├─ Session exists? → 404 if not
+  ├─ Profanity check (compliance.js) → 400 if fails
+  ├─ agent.chat(sessionId, message, history)
+  │     │
+  │     ├─ Escalation keyword? → fakeStream(handoff message)
+  │     ├─ Off-topic keyword? → fakeStream(redirect)
+  │     ├─ Financial keyword? → skip classifier → RAG
+  │     ├─ LLM classifier (llama3.2:1b) → intent: answer | escalate | off_topic
+  │     │
+  │     └─ RAG pipeline (if answer)
+  │           ├─ Catalog shortcut → reads source file directly
+  │           ├─ Loan shortcut → all personal-loans/ docs
+  │           ├─ Comparison shortcut → keyword-scored bullets
+  │           ├─ Product routing → specific product doc from disk
+  │           └─ Vector fallback → HNSWLib semantic search
+  │
+  ├─ Output validation (outputValidation.js) → blocks prompt leakage
+  ├─ SSE stream tokens → data:{"token":"..."} ... data:[DONE]
+  └─ Save user + assistant messages (message.model.js)
 ```
 
-### 3. Error Handling
+## Database Schema
 
-- Async error wrapper (`asyncHandler`)
-- Global error handler middleware
-- Consistent error response format
+Five tables, all initialised on startup in `config/database.js`:
 
-### 4. Database Models
+### `sessions`
+| Column | Type | Notes |
+|---|---|---|
+| id | TEXT | PRIMARY KEY (UUID) |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP |
 
-Models use named exports for clarity:
+### `messages`
+| Column | Type | Notes |
+|---|---|---|
+| id | TEXT | PRIMARY KEY |
+| session_id | TEXT | FK → sessions.id |
+| role | TEXT | `user` or `assistant` |
+| content | TEXT | |
+| timestamp | DATETIME | DEFAULT CURRENT_TIMESTAMP |
 
-```javascript
-import * as SessionModel from '../models/session.model.js'
-SessionModel.create()
-SessionModel.findById(sessionId)
-```
+### `escalations`
+| Column | Type | Notes |
+|---|---|---|
+| id | TEXT | PRIMARY KEY |
+| session_id | TEXT | FK → sessions.id |
+| reason | TEXT | |
+| ticket_id | TEXT | UNIQUE, format: `TKT-YYYYMMDD-NNN` |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP |
 
-### 5. Middleware Composition
+### `qa_analytics`
+| Column | Type | Notes |
+|---|---|---|
+| id | TEXT | PRIMARY KEY |
+| session_id | TEXT | FK → sessions.id |
+| question | TEXT | |
+| answer | TEXT | |
+| intent | TEXT | `answer` / `escalate` / `off_topic` |
+| sources | TEXT | JSON array of doc paths |
+| retrieval_count | INTEGER | |
+| response_time_ms | INTEGER | |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP |
 
-Route-specific middleware applied at route level:
+### `feedback`
+| Column | Type | Notes |
+|---|---|---|
+| id | TEXT | PRIMARY KEY |
+| session_id | TEXT | FK → sessions.id |
+| message_id | TEXT | Optional |
+| rating | INTEGER | 1–5 |
+| feedback_type | TEXT | `thumbs_up` / `thumbs_down` / `rating` / `comment` |
+| comment | TEXT | |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP |
 
-```javascript
-router.post('/', asyncHandler(handleChatMessage))
-```
-
-## Module Responsibilities
-
-### Models (Data Layer)
-
-**Purpose**: Database CRUD operations
-
-- No business logic
-- Pure database queries
-- Return raw data or null
-- Throw errors on database failures
-
-Example:
-
-```javascript
-export function findById(sessionId) {
-  const stmt = db.prepare('SELECT * FROM sessions WHERE id = ?')
-  return stmt.get(sessionId) || null
-}
-```
-
-### Controllers (Business Layer)
-
-**Purpose**: Handle HTTP requests and orchestrate logic
-
-- Validate inputs
-- Call models for data operations
-- Call services for external APIs
-- Format responses
-- Handle errors
-
-Example:
-
-```javascript
-export async function createSession(req, res) {
-  try {
-    const { sessionId } = SessionModel.create()
-    res.status(200).json({ sessionId })
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create session' })
-  }
-}
-```
-
-### Routes (API Layer)
-
-**Purpose**: Define HTTP endpoints and apply middleware
-
-- Map HTTP methods to controllers
-- Apply route-specific middleware
-- No business logic
-
-Example:
-
-```javascript
-router.post('/', asyncHandler(createSession))
-```
-
-### Services (Integration Layer)
-
-**Purpose**: External API integrations
-
-- Ollama streaming (ollama.service.js)
-- Future: Email service, SMS service, etc.
-
-Example:
-
-```javascript
-export async function streamResponse(prompt, res) {
-  const response = await fetch(ollamaUrl, { ... })
-  // Stream to client
-}
-```
-
-### Middleware
-
-**Purpose**: Cross-cutting concerns
-
-- **validation.js**: Input validation
-- **errorHandler.js**: Error handling and 404s
-- **sse.js**: Server-Sent Events setup
+### `quality_metrics`
+| Column | Type | Notes |
+|---|---|---|
+| id | TEXT | PRIMARY KEY |
+| interaction_id | TEXT | FK → qa_analytics.id |
+| response_length | INTEGER | |
+| source_count | INTEGER | |
+| retrieval_score_avg | REAL | |
+| contains_disclaimer | INTEGER | 0/1 |
+| contains_product_names | INTEGER | 0/1 |
+| intent_confidence | REAL | |
+| validation_passed | INTEGER | 0/1 |
 
 ## API Endpoints
 
-| Method | Endpoint                | Purpose                  | Controller               |
-| ------ | ----------------------- | ------------------------ | ------------------------ |
-| POST   | /api/session            | Create new session       | session.controller.js    |
-| POST   | /api/chat               | Send message (SSE)       | chat.controller.js       |
-| POST   | /api/escalate           | Escalate to human        | escalation.controller.js |
-| GET    | /api/history/:sessionId | Get conversation history | history.controller.js    |
-| GET    | /health                 | Health check             | index.js                 |
+| Method | Endpoint | Controller | Description |
+|---|---|---|---|
+| POST | /api/session | session.controller.js | Create session → `{ sessionId }` |
+| POST | /api/chat | chat.controller.js | Send message → SSE token stream |
+| POST | /api/escalate | escalation.controller.js | Log escalation → `{ success, ticketId }` |
+| GET | /api/history/:sessionId | history.controller.js | Conversation history |
+| POST | /api/feedback | feedback.controller.js | Submit rating/comment |
+| GET | /api/feedback/:sessionId | feedback.controller.js | Get feedback for session |
+| GET | /api/analytics/:sessionId | feedback.controller.js | Q&A interactions + feedback |
+| GET | /health | index.js | Health check |
 
-## Configuration
+## Guardrails
 
-### Environment Variables
+| Guard | Where | Behaviour |
+|---|---|---|
+| Rate limit (global) | `index.js` | 100 req / 15 min per IP |
+| Rate limit (chat) | `index.js` | 20 req / min per IP |
+| Input validation | `middleware/validation.js` | sessionId ≤ 100 chars, message ≤ 2000 chars |
+| Session gate | controllers | 404 if sessionId not in DB |
+| Escalation cooldown | `escalation.controller.js` | 429 if same session escalates within 10 min |
+| Profanity filter | `utils/compliance.js` | 400 before any LLM call |
+| LLM timeout | `agent.js` | 90 s, safe fallback response on timeout |
+| Output validation | `middleware/outputValidation.js` | Strips prompt-leakage patterns before SSE |
+| Category filter | `agent.js` | Credit card docs excluded from loan answers and vice versa |
+| History cap | `agent.js` | Token-based cap (≈ 2000 tokens) |
+| Vectorstore missing | `agent.js` | Safe fallback, no crash |
 
-All configuration through environment variables:
+## Environment Variables
 
-```bash
+```
 PORT=3001
 DB_PATH=./data/moneyhero.db
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:1b
-OLLAMA_EMBED_MODEL=nomic-embed-text
+OLLAMA_BASE_URL=http://localhost:11434     # http://ollama:11434 in Docker
+OLLAMA_MODEL=llama3.2:1b                  # generation model
+OLLAMA_CLASSIFIER_MODEL=llama3.2:1b       # intent classifier
+OLLAMA_EMBED_MODEL=nomic-embed-text       # embeddings
 NODE_ENV=development
 ```
 
-### Constants
+## Key Design Decisions
 
-Application-wide constants in `config/constants.js`:
+**agent.js as a black box.** Controllers call `agent.chat(sessionId, message, history)` and receive a stream. No controller knows about retrieval, thresholds, or prompts. This lets the RAG pipeline evolve independently.
 
-- Validation limits
-- Rate limiting configuration
-- SSE keepalive intervals
-- Ollama temperature
+**Deterministic shortcuts before LLM.** Catalog, loan, comparison, and product-routing queries are handled by keyword matching and direct file reads. The LLM is the last resort, not the first call.
 
-## Error Handling Strategy
+**All inference local.** Ollama runs in Docker alongside the backend. There are no external API keys or network calls at runtime.
 
-### 1. Async Error Handling
+**ES modules throughout.** All files use `import/export`. No CommonJS `require()`.
 
-All async routes wrapped in `asyncHandler`:
-
-```javascript
-router.post('/', asyncHandler(myController))
-```
-
-### 2. Database Error Handling
-
-Models throw errors, controllers catch and return appropriate HTTP status:
-
-```javascript
-try {
-  const session = SessionModel.findById(sessionId)
-  if (!session) return res.status(404).json({ error: 'Not found' })
-} catch (error) {
-  return res.status(500).json({ error: 'Database error' })
-}
-```
-
-### 3. Global Error Handler
-
-Catches all unhandled errors:
-
-```javascript
-app.use(globalErrorHandler)
-```
-
-## Testing Strategy
-
-### Unit Tests (Future)
-
-- Test models independently
-- Mock database in controller tests
-- Test utilities in isolation
-
-### Integration Tests (Future)
-
-- Test routes end-to-end
-- Use test database
-- Verify API contract
-
-## Development Guidelines
-
-### Adding a New Feature
-
-1. **Define routes** in `routes/` directory
-2. **Create controller** in `controllers/`
-3. **Add model functions** if database access needed
-4. **Update `routes/index.js`** to mount new routes
-5. **Add constants** to `config/constants.js` if needed
-
-### Adding a New Service
-
-1. Create service file in `services/`
-2. Export service functions
-3. Import in controllers that need it
-
-### Modifying Database Schema
-
-1. Update table creation in `config/database.js`
-2. Add/update model functions in `models/`
-3. Update controllers that use the model
-
-## Security Measures
-
-1. **Rate Limiting**: Global and chat-specific
-2. **Security Headers**: X-Frame-Options, CSP, etc.
-3. **Input Validation**: All inputs validated before processing
-4. **SQL Injection Protection**: Prepared statements only
-5. **Error Messages**: No sensitive info in production errors
-
-## Performance Considerations
-
-1. **Database Connection**: Single shared connection (better-sqlite3)
-2. **SSE Streaming**: Reduces memory usage for long responses
-3. **Rate Limiting**: Prevents API abuse
-4. **Keepalive Intervals**: Prevents client timeout
-
-## Future Enhancements
-
-- [ ] Add request ID tracking for distributed tracing
-- [ ] Implement caching layer (Redis)
-- [ ] Add Prometheus metrics
-- [ ] Implement circuit breaker for Ollama
-- [ ] Add request/response logging middleware
-- [ ] Implement database migrations
-- [ ] Add OpenAPI/Swagger documentation
-- [ ] Add comprehensive test suite
-
-## Troubleshooting
-
-### Server won't start
-
-1. Check if port 3001 is in use: `lsof -ti:3001`
-2. Check environment variables are set
-3. Check database directory exists
-
-### Database errors
-
-1. Check DB_PATH environment variable
-2. Verify data directory has write permissions
-3. Check SQLite installation
-
-### Ollama connection errors
-
-1. Verify Ollama is running: `curl http://localhost:11434/api/tags`
-2. Check OLLAMA_BASE_URL environment variable
-3. Verify models are pulled: `ollama list`
+**Prepared statements only.** All SQLite queries use `better-sqlite3` prepared statements — no string interpolation, no SQL injection surface.
 
 ---
 
-**Last Updated**: February 2026
-**Version**: 2.0.0
-**Architecture**: MVC with modular organization
+*Last updated: March 2026 — Architecture v2.1*
