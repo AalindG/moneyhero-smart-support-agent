@@ -2,7 +2,13 @@
 
 ## AI Tools Used
 
-The primary tool throughout this project was **Claude Code** (Anthropic's CLI), running inside VS Code via the native extension. I used it in agentic mode — dispatching specialized subagents (scaffolder, rag-engineer, api-engineer, qa-integrator) rather than asking for single-file edits. No other AI coding tools were used.
+**Tools used to build the project:** The primary tool was **Claude Code** (Anthropic's CLI), running inside VS Code via the native extension. I used it in agentic mode — dispatching specialized subagents (scaffolder, rag-engineer, principal-backend-dev, senior-qa-engineer) rather than asking for single-file edits. No other AI *coding* tools were used to write or generate code.
+
+**LLMs powering the product itself:** The chatbot runs entirely on local LLMs via [Ollama](https://ollama.com):
+- `llama3.2:1b` — intent classifier (answer / escalate / off_topic) and response generation
+- `nomic-embed-text` — document embeddings for the HNSWLib vector store
+
+All inference runs locally in Docker. There are no external AI API calls at runtime.
 
 ---
 
@@ -10,19 +16,19 @@ The primary tool throughout this project was **Claude Code** (Anthropic's CLI), 
 
 AI assistance had the clearest impact in four areas:
 
-**Parallel implementation.** The biggest time saving came from dispatching the rag-engineer and api-engineer agents simultaneously. Tasks that would normally be sequential — building the RAG pipeline in `agent.js` while wiring up Express routes and SQLite in `db.js` and `routes/chat.js` — ran in parallel because the agents worked on non-overlapping files. A full afternoon of work was compressed to roughly 30 minutes of wall-clock time.
+**Parallel implementation.** The biggest time saving came from dispatching the rag-engineer and principal-backend-dev agents simultaneously. Tasks that would normally be sequential — building the RAG pipeline in `agent.js` while wiring up Express routes and SQLite across the MVC layer — ran in parallel because the agents worked on non-overlapping files. A full afternoon of work was compressed to roughly 30 minutes of wall-clock time.
 
 **Guardrails layer.** Adding production guardrails (rate limiting, input validation, session checks, profanity filtering, LLM timeouts, vectorstore fallbacks, history capping, output validation) across multiple files in a single session would have taken hours manually. With clear per-agent task lists and explicit file ownership, agents completed their changes concurrently with no conflicts.
 
 **Iterative debugging and strategy review.** When specific conversation patterns produced wrong answers (comparison queries returning one card instead of many, loan listing returning credit card names), Claude Code traced each bug to its root cause — duplicate `const` declarations causing SyntaxErrors, misrouted keywords pointing to the wrong product category, an unresolved `{history}` placeholder — and implemented fixes in priority order across multiple files simultaneously. A strategy review session identified 8 issues in the RAG pipeline, LLM selection, and output validation layers; all 8 were fixed and committed in a single pass.
 
-**Boilerplate elimination.** Setting up the Docker Compose configuration, the `setup.sh` script, `.env.example`, `.gitignore`, and the MVC folder restructuring (18 files) required almost no manual effort. The scaffolder and qa-integrator agents handled structural work that would otherwise have been tedious copy-paste from previous projects.
+**Boilerplate elimination.** Setting up the Docker Compose configuration, the `setup.sh` script, `.env.example`, `.gitignore`, and the MVC folder restructuring (18 files) required almost no manual effort. The scaffolder and senior-qa-engineer agents handled structural work that would otherwise have been tedious copy-paste from previous projects.
 
 ---
 
 ## Prompting Strategies
 
-**File ownership rules worked well.** Defining which agent owned which files in `CLAUDE.md` eliminated merge conflicts entirely. When the api-engineer and rag-engineer ran in parallel, they never touched the same file.
+**File ownership rules worked well.** Defining which agent owned which files in `CLAUDE.md` eliminated merge conflicts entirely. When the principal-backend-dev and rag-engineer ran in parallel, they never touched the same file.
 
 **Giving agents full context up front.** Rather than letting agents explore the codebase themselves for every task, I pre-read the relevant files and included the current structure in the prompt. This cut down on wasted tool calls and produced more targeted edits on the first attempt.
 
@@ -30,7 +36,7 @@ AI assistance had the clearest impact in four areas:
 
 **Escalating to strategy reviews when patterns repeated.** After fixing individual output bugs two or three times, asking for a comprehensive review of the RAG, ingestion, and LLM strategy surfaced 8 root causes in one pass — rather than continuing to play whack-a-mole with individual symptoms.
 
-**Treating agents as black boxes with contracts.** The api-engineer calling `agent.chat()` without knowing its internals, and the rag-engineer never touching Express code, kept each agent focused and prevented scope creep.
+**Treating agents as black boxes with contracts.** The principal-backend-dev calling `agent.chat()` without knowing its internals, and the rag-engineer never touching Express code, kept each agent focused and prevented scope creep.
 
 ---
 
