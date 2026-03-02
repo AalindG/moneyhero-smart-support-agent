@@ -1,56 +1,121 @@
 # OCBC 365 Credit Card
 
 ## Overview
-
-The OCBC 365 Credit Card is Singapore's most popular everyday spending card, specially designed to reward the purchases you make most frequently. With its attractive cashback structure covering dining, petrol, groceries, and telecommunications, this card ensures you earn meaningful returns on your daily necessities. The card name "365" reflects its value proposition - rewarding you every single day of the year on the things that matter most to Singaporean households.
-
-What makes the OCBC 365 stand out is its practical cashback categories that align perfectly with typical monthly expenses. Whether you're filling up your tank at Shell or Caltex, having dinner at restaurants and hawker centers, shopping for groceries at Giant or FairPrice, or paying your mobile and broadband bills, you'll earn between 3% to 6% cashback consistently. Unlike many cards with complex tier systems or spending caps, the OCBC 365 keeps it straightforward.
-
-The card is perfect for families and working professionals who want hassle-free cashback without having to track rotating categories or meet complicated criteria. With over 500,000 cardholders in Singapore, it's proven its value as a reliable everyday companion.
+The OCBC 365 Card is one of Singapore's most popular cashback cards for everyday spending. It offers high cashback rates on essential categories like dining, groceries, and transport.
 
 ## Key Benefits
+- **6% cashback** on dining (capped at $80/month)
+- **3% cashback** on groceries, online shopping, and recurring bills
+- **0.3% cashback** on all other spending
+- **No annual fee** for the first year
+- Minimum spend requirement: $800/month to earn bonus cashback
 
-- **6% cashback on dining** - Earn the highest cashback rate when you dine at restaurants, food courts, hawker centers, cafes, and food delivery platforms like GrabFood and Deliveroo
-- **5% cashback on petrol** - Get rewarded every time you pump fuel at Shell, Caltex, Esso, SPC, and Sinopec stations across Singapore
-- **3% cashback on groceries** - Save on household expenses with cashback at FairPrice, Cold Storage, Giant, Sheng Siong, and other major supermarkets
-- **0.3% cashback on all other spending** - Even purchases outside the main categories earn you some returns
-- **Monthly cashback cap of S$80** - Earn up to S$960 per year in cashback with the monthly ceiling
-- **First year annual fee waived** - Try the card free for the first 12 months; subsequent years waived with S$12,000 minimum annual spend
+## Cashback Categories
 
-## Eligibility
+### 6% Cashback (Dining)
+- Restaurants and cafes
+- Food courts and hawker (if card accepted)
+- Food delivery (GrabFood, Deliveroo, foodpanda)
+- Bars and pubs
+- **Monthly cap: $80** (requires $1,333 dining spend)
 
-To be eligible for the OCBC 365 Credit Card, you must fulfill these requirements:
+### 3% Cashback
+- Supermarkets (FairPrice, Cold Storage, Giant)
+- Online shopping (all merchants)
+- Petrol stations
+- Utilities (SP Services, PUB)
+- Telco bills
+- Streaming subscriptions
+- **Monthly cap: $80** (requires $2,667 spend)
 
-- **Minimum Annual Income**: S$35,000 per year for Singapore Citizens and Permanent Residents; S$45,000 per year for foreigners
-- **Citizenship**: Available to Singapore Citizens, Permanent Residents, and foreigners with valid work permits (Employment Pass, S Pass)
-- **Age**: Must be at least 21 years old
-- **Employment**: Must be currently employed or have stable self-employment income with proper documentation
-- **Credit History**: Clean credit record with no recent bankruptcies, legal proceedings, or adverse credit events
-- **OCBC Relationship**: Both existing OCBC customers and new-to-bank applicants are welcome
+### 0.3% Cashback
+- All other spending
+- No cap
+
+## Eligibility Requirements
+- Minimum annual income: $30,000
+- Singapore citizen or Permanent Resident
+- Age 21-65 years old
+
+## Required Documents
+- NRIC (front and back)
+- Latest 3 months payslips, OR
+- Latest 12 months CPF contribution history, OR
+- Latest Notice of Assessment
+
+## Fees and Charges
+| Fee Type | Amount |
+|----------|--------|
+| Annual Fee | $194.40 (waived first year) |
+| Late Payment Fee | $100 |
+| Finance Charge | 26.9% p.a. |
+| Cash Advance Fee | 6% (min $15) |
+| Foreign Transaction Fee | 2.9% |
+
+## Cashback Calculation Example
+
+### Monthly Spending Pattern
+| Category | Spend | Rate | Cashback |
+|----------|-------|------|----------|
+| Dining | $500 | 6% | $30 |
+| Groceries | $400 | 3% | $12 |
+| Online Shopping | $300 | 3% | $9 |
+| Petrol | $200 | 3% | $6 |
+| Others | $600 | 0.3% | $1.80 |
+| **Total** | **$2,000** | | **$58.80** |
+
+Annual cashback: $705.60 (if consistent spending)
+
+## Important Notes
+
+### Minimum Spend Requirement
+- Must spend at least **$800/month** to earn 6% and 3% rates
+- If below $800: Only 0.3% on all categories
+- Spend is cumulative across all categories
+
+### Cashback Caps
+- 6% dining: $80/month cap
+- 3% categories: $80/month cap combined
+- 0.3% base: No cap
+- **Maximum monthly cashback: $160** (plus uncapped 0.3%)
+
+### Excluded Transactions
+- Government payments
+- Insurance premiums (most)
+- Education fees
+- Charitable donations
+- NETS transactions
+
+## Comparison with Similar Cards
+
+| Feature | OCBC 365 | Citi Cash Back+ | DBS Live Fresh |
+|---------|----------|-----------------|----------------|
+| Dining | 6% | 1.6% | 5% |
+| Groceries | 3% | 1.6% | 1% |
+| General | 0.3% | 1.6% | 1% |
+| Min Spend | $800 | None | $600 |
+| Best For | Foodies | Simplicity | Online |
+
+## Who Should Get This Card?
+**Best for**:
+- People who dine out frequently
+- Families with regular grocery shopping
+- Those who can meet $800/month minimum spend
+
+**Not ideal for**:
+- Low spenders (under $800/month)
+- Those who prefer miles over cashback
+- People who want simplicity (tracking spend categories)
 
 ## How to Apply
+1. Apply via SingSaver for exclusive promotions
+2. Complete online application with MyInfo
+3. Submit income documents
+4. Receive approval within 2-3 business days
+5. Card delivered in 5-7 days
 
-Applying for the OCBC 365 Credit Card is a straightforward process:
-
-1. **Visit OCBC's website or mobile app** - Go to the OCBC credit cards section and select the 365 Credit Card; click "Apply Now" to start your application
-2. **Use Singpass for instant verification** - Leverage Singpass MyInfo to auto-fill your personal details and verify your income with CPF data; this speeds up approval significantly and reduces document requirements
-3. **Fill in additional details** - Complete any remaining fields not covered by MyInfo, including your preferred credit limit, existing credit card details, and financial commitments like loans or mortgages
-4. **Review and submit** - Carefully review all entered information for accuracy; incorrect details may delay approval or result in rejection; agree to terms and conditions and submit your application
-5. **Receive application outcome** - OCBC typically provides instant preliminary approval for straightforward applications; if further review is needed, you'll be notified within 3-5 business days via SMS or email
-6. **Get your card delivered** - Approved cards are dispatched within 5-7 working days via registered mail; activate your card by calling OCBC's activation hotline or using the OCBC Digital app before first use
-
-## Fees
-
-| Fee Type | Amount |
-|----------|---------|
-| Annual Fee | S$180 (waived for first year, waived subsequently with S$12,000 annual spend) |
-| Late Payment Fee | S$90 per month |
-| Interest on Purchases | 25.9% p.a. |
-| Interest on Cash Advances | 26.9% p.a. |
-| Cash Advance Fee | 6% of withdrawal amount (minimum S$15) |
-| Foreign Currency Transaction Fee | 3.5% of transaction amount |
-| Card Replacement Fee | S$20 per replacement |
-| Overlimit Fee | S$40 per occurrence |
-| GIRO/Cheque Return Fee | S$50 per returned payment |
-| Balance Transfer Processing Fee | 3.5% of transfer amount |
-| Statement Reprint Fee | S$5 per statement copy |
+## Current Promotions (via SingSaver)
+- $250 cash gift for new cardholders
+- Additional $50 for first transaction
+- No minimum spend required for welcome gift
+- Limited time offer, terms and conditions apply

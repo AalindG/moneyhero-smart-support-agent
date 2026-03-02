@@ -325,7 +325,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     const isSpecificQuery =
       /\b(what is|how much|when|where|who)\b/i.test(message) ||
       /\b(fee|rate|income|age|requirement|eligibility)\b/i.test(message)
-    const isThresholdComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
+    const isThresholdComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(
+      message
+    )
     const isBroadQuery = /\b(all|list|available|offer|have|what cards|what loans)\b/i.test(message)
 
     // Set threshold based on query type (broad wins over comparison to avoid under-retrieval)
@@ -544,9 +546,14 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
 
     if (isComparisonQuery) {
       // Determine product type for the comparison — loan vs credit card
-      const isLoanComparison = ['loan', 'borrow', 'repayment', 'instalment', 'installment', 'cashone'].some(
-        kw => lowerMsg.includes(kw)
-      )
+      const isLoanComparison = [
+        'loan',
+        'borrow',
+        'repayment',
+        'instalment',
+        'installment',
+        'cashone'
+      ].some(kw => lowerMsg.includes(kw))
 
       if (isLoanComparison) {
         // Build loan comparison context from all personal loan files
@@ -561,148 +568,152 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
           if (loanContextParts.length > 0) {
             context = sanitizeCtx(loanContextParts.join('\n\n---\n\n'))
             docSources = loanFiles.map(f => `personal-loans/${f}`)
-            console.log(`  [retrieval] loan comparison → ${loanFiles.length} loan doc(s) as context`)
+            console.log(
+              `  [retrieval] loan comparison → ${loanFiles.length} loan doc(s) as context`
+            )
           }
         } catch (loanReadErr) {
-          console.warn(`  [retrieval] could not read loans dir for comparison: ${loanReadErr.message} — falling through`)
+          console.warn(
+            `  [retrieval] could not read loans dir for comparison: ${loanReadErr.message} — falling through`
+          )
         }
       }
 
       if (!context) {
-      // Credit card comparison — use overview.md for per-card feature summaries
-      const overviewSrc = 'credit-cards/overview.md'
-      try {
-        const overviewRaw = readFileSync(join(projectRoot, 'docs', overviewSrc), 'utf8')
+        // Credit card comparison — use overview.md for per-card feature summaries
+        const overviewSrc = 'credit-cards/overview.md'
+        try {
+          const overviewRaw = readFileSync(join(projectRoot, 'docs', overviewSrc), 'utf8')
 
-        // Extract per-card bullet points from the "## Available Credit Cards" section
-        const sectionStart = overviewRaw.indexOf('## Available Credit Cards')
-        const sectionEnd = overviewRaw.indexOf('\n## ', sectionStart + 1)
-        const bulletSection =
-          sectionStart !== -1
-            ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
-            : overviewRaw
+          // Extract per-card bullet points from the "## Available Credit Cards" section
+          const sectionStart = overviewRaw.indexOf('## Available Credit Cards')
+          const sectionEnd = overviewRaw.indexOf('\n## ', sectionStart + 1)
+          const bulletSection =
+            sectionStart !== -1
+              ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
+              : overviewRaw
 
-        // Each card is a markdown bullet starting with "- **Card Name**"
-        const cardBullets = bulletSection.match(/^- \*\*[^*]+\*\*.+$/gm) || []
+          // Each card is a markdown bullet starting with "- **Card Name**"
+          const cardBullets = bulletSection.match(/^- \*\*[^*]+\*\*.+$/gm) || []
 
-        // Extract feature keywords from the query (strip common stop words)
-        const STOP_WORDS = new Set([
-          'what',
-          'which',
-          'card',
-          'cards',
-          'come',
-          'with',
-          'offer',
-          'have',
-          'does',
-          'do',
-          'you',
-          'the',
-          'that',
-          'for',
-          'are',
-          'give',
-          'best',
-          'most',
-          'any',
-          'can',
-          'include',
-          'provide',
-          'support',
-          'me',
-          'tell',
-          'show',
-          'list',
-          'get',
-          'is',
-          'a',
-          'an',
-          'and',
-          'or',
-          'of',
-          'in',
-          'on',
-          'to',
-          'by',
-          'from',
-          'into',
-          // Follow-up / filler words that appear in "which ones are good for X?" queries
-          'ones',
-          'one',
-          'good',
-          'great',
-          'ideal',
-          'perfect',
-          'better',
-          'nice',
-          'well'
-        ])
-        const featureWords = lowerMsg
-          .replace(/[^a-z\s]/g, '')
-          .split(/\s+/)
-          .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+          // Extract feature keywords from the query (strip common stop words)
+          const STOP_WORDS = new Set([
+            'what',
+            'which',
+            'card',
+            'cards',
+            'come',
+            'with',
+            'offer',
+            'have',
+            'does',
+            'do',
+            'you',
+            'the',
+            'that',
+            'for',
+            'are',
+            'give',
+            'best',
+            'most',
+            'any',
+            'can',
+            'include',
+            'provide',
+            'support',
+            'me',
+            'tell',
+            'show',
+            'list',
+            'get',
+            'is',
+            'a',
+            'an',
+            'and',
+            'or',
+            'of',
+            'in',
+            'on',
+            'to',
+            'by',
+            'from',
+            'into',
+            // Follow-up / filler words that appear in "which ones are good for X?" queries
+            'ones',
+            'one',
+            'good',
+            'great',
+            'ideal',
+            'perfect',
+            'better',
+            'nice',
+            'well'
+          ])
+          const featureWords = lowerMsg
+            .replace(/[^a-z\s]/g, '')
+            .split(/\s+/)
+            .filter(w => w.length > 2 && !STOP_WORDS.has(w))
 
-        // Expand feature words with domain synonyms to improve matching
-        // Example: "travel" should also match cards mentioning "miles", "airline", "flyer"
-        const FEATURE_SYNONYMS = {
-          travel: ['miles', 'airline', 'flyer', 'flight', 'airport', 'krisflyer'],
-          dining: ['restaurant', 'food', 'eating', 'meal'],
-          shopping: ['retail', 'purchase', 'buying'],
-          cashback: ['rebate', 'refund'],
-          online: ['internet', 'ecommerce', 'digital']
-        }
-        
-        const expandedFeatureWords = new Set(featureWords)
-        for (const word of featureWords) {
-          if (FEATURE_SYNONYMS[word]) {
-            FEATURE_SYNONYMS[word].forEach(syn => expandedFeatureWords.add(syn))
+          // Expand feature words with domain synonyms to improve matching
+          // Example: "travel" should also match cards mentioning "miles", "airline", "flyer"
+          const FEATURE_SYNONYMS = {
+            travel: ['miles', 'airline', 'flyer', 'flight', 'airport', 'krisflyer'],
+            dining: ['restaurant', 'food', 'eating', 'meal'],
+            shopping: ['retail', 'purchase', 'buying'],
+            cashback: ['rebate', 'refund'],
+            online: ['internet', 'ecommerce', 'digital']
           }
-        }
-        const matchWords = Array.from(expandedFeatureWords)
 
-        // Score each bullet by number of feature word hits (using expanded synonyms)
-        const scoredBullets = cardBullets
-          .map(bullet => ({
-            bullet,
-            score: matchWords.filter(w => bullet.toLowerCase().includes(w)).length
-          }))
-          .filter(x => x.score > 0)
-          .sort((a, b) => b.score - a.score)
+          const expandedFeatureWords = new Set(featureWords)
+          for (const word of featureWords) {
+            if (FEATURE_SYNONYMS[word]) {
+              FEATURE_SYNONYMS[word].forEach(syn => expandedFeatureWords.add(syn))
+            }
+          }
+          const matchWords = Array.from(expandedFeatureWords)
 
-        // Return cards with score >= 50% of max score to include relevant matches
-        // Example: "cashback on dining" - if OCBC scores 4 (with restaurant, food synonyms)
-        //          and Citi scores 2 (cashback + dining only), both are relevant
-        const maxScore = scoredBullets[0]?.score ?? 0
-        const scoreThreshold = Math.max(2, Math.floor(maxScore * 0.5)) // At least 2 to filter noise
-        const topBullets = scoredBullets.filter(x => x.score >= scoreThreshold)
+          // Score each bullet by number of feature word hits (using expanded synonyms)
+          const scoredBullets = cardBullets
+            .map(bullet => ({
+              bullet,
+              score: matchWords.filter(w => bullet.toLowerCase().includes(w)).length
+            }))
+            .filter(x => x.score > 0)
+            .sort((a, b) => b.score - a.score)
 
-        if (topBullets.length > 0) {
-          const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
-          const intro =
-            topBullets.length === 1
-              ? 'One card matches your query:'
-              : `${topBullets.length} cards match your query:`
-          const directAnswer = `${intro}\n\n${matchedCards}`
-          console.log(
-            `  [retrieval] comparison match → ${topBullets.length} card(s) from overview.md`
-          )
+          // Return cards with score >= 50% of max score to include relevant matches
+          // Example: "cashback on dining" - if OCBC scores 4 (with restaurant, food synonyms)
+          //          and Citi scores 2 (cashback + dining only), both are relevant
+          const maxScore = scoredBullets[0]?.score ?? 0
+          const scoreThreshold = Math.max(2, Math.floor(maxScore * 0.5)) // At least 2 to filter noise
+          const topBullets = scoredBullets.filter(x => x.score >= scoreThreshold)
+
+          if (topBullets.length > 0) {
+            const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
+            const intro =
+              topBullets.length === 1
+                ? 'One card matches your query:'
+                : `${topBullets.length} cards match your query:`
+            const directAnswer = `${intro}\n\n${matchedCards}`
+            console.log(
+              `  [retrieval] comparison match → ${topBullets.length} card(s) from overview.md`
+            )
+            docSources = [overviewSrc]
+            const memory = getSessionMemory(sessionId)
+            if (streaming) return { directReply: directAnswer, memory, sources: docSources }
+            await memory.saveContext({ input: message }, { output: directAnswer })
+            return { reply: directAnswer, sources: docSources }
+          }
+
+          // No keyword match — fall back to LLM with full overview.md as context
+          context = sanitizeCtx(overviewRaw)
           docSources = [overviewSrc]
-          const memory = getSessionMemory(sessionId)
-          if (streaming) return { directReply: directAnswer, memory, sources: docSources }
-          await memory.saveContext({ input: message }, { output: directAnswer })
-          return { reply: directAnswer, sources: docSources }
+          console.log(
+            `  [retrieval] comparison query → no keyword match, LLM fallback with overview.md`
+          )
+        } catch (e) {
+          console.warn(`  [retrieval] could not read overview.md: ${e.message} — falling through`)
         }
-
-        // No keyword match — fall back to LLM with full overview.md as context
-        context = sanitizeCtx(overviewRaw)
-        docSources = [overviewSrc]
-        console.log(
-          `  [retrieval] comparison query → no keyword match, LLM fallback with overview.md`
-        )
-      } catch (e) {
-        console.warn(`  [retrieval] could not read overview.md: ${e.message} — falling through`)
-      }
       } // end if (!context) credit-card comparison branch
     } // end if (isComparisonQuery)
 
@@ -724,7 +735,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       'dbs live fresh': 'credit-cards/dbs-live-fresh.md',
       'live fresh': 'credit-cards/dbs-live-fresh.md',
       ocbc: 'credit-cards/ocbc-365.md',
-      '365': 'credit-cards/ocbc-365.md',
+      365: 'credit-cards/ocbc-365.md',
       uob: 'credit-cards/uob-krisflyer.md',
       krisflyer: 'credit-cards/uob-krisflyer.md',
       // Personal loans
@@ -835,7 +846,8 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
                 const feeVal = matchedLine.slice(colonIdx + 2).trim()
                 // Reconstruct a human-friendly product name from the filename (strip folder prefix)
                 const cardDisplayName = targetFile
-                  .split('/').pop() // Remove folder prefix (e.g. "credit-cards/")
+                  .split('/')
+                  .pop() // Remove folder prefix (e.g. "credit-cards/")
                   .replace('.md', '')
                   .split('-')
                   .map(w => w.charAt(0).toUpperCase() + w.slice(1))

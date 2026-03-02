@@ -1,67 +1,127 @@
 # Fees and Charges FAQ
 
-## What fees should I watch out for with credit cards?
+## Credit Card Fees
 
-### Annual Fee
-- Ranges from $0 (free-for-life cards) to ~$540 for premium cards
-- Many banks waive the first 1–2 years
-- Can often be waived upon request if you meet minimum spend thresholds
+### What is an annual fee and can it be waived?
+An annual fee is charged yearly for card membership. Many cards offer:
+- First year waiver
+- Waiver with minimum spend (e.g., $10,000/year)
+- Permanent waiver through SingSaver promotions
+- Waiver upon request (call the bank and ask!)
 
-### Late Payment Fee
-- Charged if you miss your payment due date: typically $100
-- Also triggers loss of any interest-free grace period for that billing cycle
-- Repeated late payments affect your credit score
+**Pro tip**: Most banks will waive annual fees if you call and ask, especially if you're a good customer.
 
-### Cash Advance Fee
-- Fee for withdrawing cash using your credit card
-- Typically 6% of the amount withdrawn, minimum $15
-- Interest accrues immediately at ~28% p.a. — no grace period
+### What is a late payment fee?
+Charged when you don't pay at least the minimum amount by the due date:
+- Typical amount: $100
+- Also affects your credit score
+- May trigger interest on entire balance
 
-### Foreign Transaction Fee
-- Charged on purchases made in foreign currencies
-- Typically 2.8%–3.5% of the transaction amount
-- Some premium travel cards waive this fee
+### What is a finance charge?
+Interest charged on unpaid balances. In Singapore:
+- Typical rate: 25-28% p.a.
+- Calculated daily on outstanding balance
+- Avoid by paying full balance monthly
 
-### Overlimit Fee
-- Charged if you exceed your credit limit: typically $40
-- You can opt out of overlimit protection (card declined instead)
+### What is a cash advance fee?
+Charged when you withdraw cash using your credit card:
+- Fee: 5-8% of amount (minimum $15-20)
+- Interest starts immediately (no grace period)
+- Higher interest rate than purchases
+- **Recommendation**: Avoid cash advances if possible
 
-## Are there fees for personal loans?
+### What are foreign transaction fees?
+Charged when you spend in foreign currency:
+- Typical fee: 2.5-3.5%
+- Applies to overseas purchases AND online purchases in foreign currency
+- Some cards offer lower or no foreign transaction fees
 
-### Processing Fee
-- Most banks charge $0 — no upfront fee
-- Some may charge 1%–2% — always check before applying
+### What is an overlimit fee?
+Charged if you exceed your credit limit:
+- Typical fee: $40-50
+- May also decline the transaction
+- Can affect credit score
 
-### Early Repayment / Prepayment Fee
-- Charged if you repay your loan before the end of the tenure
-- Typically 1%–2% of the outstanding loan amount or a flat fee of $150–$250
-- Factor this in if you plan to repay early
+## Personal Loan Fees
 
-### Late Payment Fee
-- $80–$100 per month for missed or insufficient payments
-- Can also affect your credit score with CBS
+### What is a processing fee?
+A one-time fee charged when your loan is approved:
+- Typical range: 1-3% of loan amount
+- Often waived through SingSaver promotions
+- Deducted from loan disbursement or added to loan
 
-## What is the credit card interest rate?
+### What is an early repayment fee?
+Charged if you pay off your loan before the agreed tenure:
+- Typical fee: 2-3% of outstanding balance
+- May include an admin fee ($100-200)
+- Calculate if early repayment still saves money overall
 
-Standard purchase interest rate: **26.9% p.a.** for most cards in Singapore
+### What is a late payment fee for loans?
+Charged when you miss a monthly installment:
+- Flat fee: $50-100
+- Plus interest on overdue amount (often 3% per month)
+- Affects credit score significantly
 
-This applies to any balance not paid in full by the payment due date.
+### What is the difference between flat rate and EIR?
 
-## Are annual fees negotiable?
+**Flat Rate**:
+- Simple calculation: Interest % x Principal x Years
+- Doesn't account for reducing balance
+- The rate you see advertised
 
-Yes! Most banks will waive the annual fee if you:
-- Call the customer service hotline and request a waiver
-- Have been a loyal customer (1+ years)
-- Have met minimum spend requirements
-- Threaten to cancel the card (use as a last resort)
+**EIR (Effective Interest Rate)**:
+- True cost of borrowing
+- Accounts for monthly repayments reducing principal
+- Always higher than flat rate
+- Required by MAS to be disclosed
 
-## What fees are excluded from cashback/rewards earning?
+**Example**:
+- 5% flat rate over 3 years ≈ 9.5% EIR
+- Always compare EIR, not flat rates!
 
-Common exclusions from cashback and points earning:
-- Government transactions (taxes, stamp duties, S45 withholding tax)
-- AXS and SAM transactions
-- Insurance premium payments (via GIRO)
-- Utilities (via GIRO/direct debit)
-- Top-ups to e-wallets (Grabpay, Shopeepay)
-- Charity donations
-- Balance transfers and cash advances
+## How to Minimize Fees
+
+### Credit Cards
+1. Set up GIRO for full payment (avoid late fees and interest)
+2. Apply through SingSaver for annual fee waivers
+3. Call to waive annual fee before it's charged
+4. Avoid cash advances
+5. Use cards with no foreign transaction fees for overseas spending
+
+### Personal Loans
+1. Apply through SingSaver for processing fee waivers
+2. Choose appropriate tenure (shorter = less total interest)
+3. Set up auto-debit to avoid late payment fees
+4. Calculate if early repayment saves money after fees
+
+## Hidden Fees to Watch Out For
+
+### Credit Cards
+- Supplementary card fees
+- Card replacement fees ($20-30)
+- Statement copy fees
+- Payment via non-GIRO methods
+
+### Personal Loans
+- Loan cancellation fees
+- Document retrieval fees
+- Restructuring fees
+- Insurance premiums (often optional)
+
+## Fee Comparison Example
+
+### Credit Card: $10,000 outstanding balance
+| Scenario | Monthly Cost |
+|----------|--------------|
+| Pay in full | $0 |
+| Pay minimum (3%) | ~$210 interest |
+| Pay late | $100 fee + interest |
+| Cash advance | 6% fee + daily interest |
+
+### Personal Loan: $50,000 over 5 years
+| Fee Type | Typical Cost |
+|----------|-------------|
+| Processing (3%) | $1,500 |
+| Early repayment (3%) | $1,500 (if year 1) |
+| Late payment | $100 + 3% monthly |
+| **Total if via SingSaver** | **$0 processing** |
