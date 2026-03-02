@@ -38,8 +38,16 @@ echo ""
 echo "[INFO] Checking existing Ollama models..."
 docker compose exec -T ollama ollama list
 
-# Pull LLM model (1B version to match docker-compose.yml)
-echo "[INFO] Pulling llama3.2:1b model..."
+# Pull LLM models
+echo "[INFO] Pulling llama3.2:3b model (main generation)..."
+if docker compose exec -T ollama ollama pull llama3.2:3b; then
+    echo "[SUCCESS] llama3.2:3b model pulled successfully"
+else
+    echo "[ERROR] Failed to pull llama3.2:3b model"
+    exit 1
+fi
+
+echo "[INFO] Pulling llama3.2:1b model (intent classifier)..."
 if docker compose exec -T ollama ollama pull llama3.2:1b; then
     echo "[SUCCESS] llama3.2:1b model pulled successfully"
 else
