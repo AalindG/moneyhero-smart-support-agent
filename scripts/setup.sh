@@ -38,8 +38,16 @@ echo ""
 echo "[INFO] Checking existing Ollama models..."
 docker compose exec -T ollama ollama list
 
-# Pull LLM model (1B version to match docker-compose.yml)
-echo "[INFO] Pulling llama3.2:1b model..."
+# Pull LLM models
+echo "[INFO] Pulling llama3.2:3b model (main generation)..."
+if docker compose exec -T ollama ollama pull llama3.2:3b; then
+    echo "[SUCCESS] llama3.2:3b model pulled successfully"
+else
+    echo "[ERROR] Failed to pull llama3.2:3b model"
+    exit 1
+fi
+
+echo "[INFO] Pulling llama3.2:1b model (intent classifier)..."
 if docker compose exec -T ollama ollama pull llama3.2:1b; then
     echo "[SUCCESS] llama3.2:1b model pulled successfully"
 else
@@ -94,11 +102,12 @@ fi
 
 echo ""
 echo "======================================"
-echo "[SUCCESS] MoneyHero backend is ready!"
+echo "[SUCCESS] MoneyHero is ready!"
 echo "======================================"
-echo "Backend API: http://localhost:3001"
-echo "Health Check: http://localhost:3001/health"
-echo "Ollama API: http://localhost:11434"
+echo "Chat interface: http://localhost:3000"
+echo "Backend API:    http://localhost:3001"
+echo "Health check:   http://localhost:3001/health"
+echo "Ollama API:     http://localhost:11434"
 echo ""
 echo "To view logs:"
 echo "  docker compose logs -f backend"

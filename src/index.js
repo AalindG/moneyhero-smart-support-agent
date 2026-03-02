@@ -3,10 +3,21 @@ import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import apiRoutes from './routes/index.js'
+import { warmup } from './agent.js'
 import { initializeTables, closeDatabase } from './config/database.js'
 import { globalErrorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { RATE_LIMIT } from './config/constants.js'
 import * as logger from './utils/logger.js'
+
+// Patch console globally so every log across all modules gets a UTC timestamp.
+// Must happen before any imports run their module-level code.
+const _ts = () => new Date().toISOString().replace('T', ' ').slice(0, -1)
+const _origLog = console.log
+const _origWarn = console.warn
+const _origError = console.error
+console.log   = (...a) => _origLog  (`[${_ts()}]`, ...a)
+console.warn  = (...a) => _origWarn (`[${_ts()}] WARN:`, ...a)
+console.error = (...a) => _origError(`[${_ts()}] ERROR:`, ...a)
 
 // Load environment variables first
 dotenv.config()
@@ -16,6 +27,9 @@ initializeTables()
 
 // Initialize Express app
 const app = express()
+
+// Trust the first proxy (Nginx) so express-rate-limit can read X-Forwarded-For correctly
+app.set('trust proxy', 1)
 
 // Configuration
 const PORT = process.env.PORT || 3001
@@ -98,6 +112,8 @@ const server = app.listen(PORT, () => {
     port: PORT,
     environment: NODE_ENV
   })
+  // Pre-warm Ollama model in the background so the first user request is fast
+  warmup()
 })
 
 server.on('error', error => {

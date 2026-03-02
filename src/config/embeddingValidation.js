@@ -19,7 +19,7 @@ function normalizeModelName(name) {
 
 /**
  * Check if Ollama has the required embedding model
- * @param {string} modelName - Model name (e.g., "nomic-embed-text")
+ * @param {string} modelName - Model name (e.g., "nomic-embed-text:v1.5")
  * @param {string} ollamaBaseUrl - Ollama base URL
  * @returns {Promise<boolean>} True if model exists
  */
@@ -33,16 +33,23 @@ export async function checkOllamaModel(modelName, ollamaBaseUrl) {
 
     const data = await response.json()
 
-    // Normalize both sides so "nomic-embed-text" matches "nomic-embed-text:latest"
-    const normalizedTarget = normalizeModelName(modelName)
-    const hasModel = data.models?.some(m => normalizeModelName(m.name) === normalizedTarget)
+    // Check if model exists with exact name match (including tag)
+    const hasModel = data.models?.some(m => m.name === modelName)
 
     if (!hasModel) {
-      // List available models for debugging
-      const available = data.models?.map(m => m.name).join(', ') || 'none'
-      console.error(`❌ Model ${modelName} not found`)
-      console.error(`   Available models: ${available}`)
-      return false
+      // Also check without tag normalization for :latest case
+      const normalizedTarget = normalizeModelName(modelName)
+      const hasNormalizedModel = data.models?.some(
+        m => normalizeModelName(m.name) === normalizedTarget
+      )
+
+      if (!hasNormalizedModel) {
+        // List available models for debugging
+        const available = data.models?.map(m => m.name).join(', ') || 'none'
+        console.error(`❌ Model ${modelName} not found`)
+        console.error(`   Available models: ${available}`)
+        return false
+      }
     }
 
     return true

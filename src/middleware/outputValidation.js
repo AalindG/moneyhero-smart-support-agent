@@ -7,6 +7,9 @@
  */
 
 // Prohibited patterns that should never appear in user-facing responses
+// NOTE: Only block genuine prompt-leakage signals — not natural grounded LLM phrasing.
+//       Patterns like "based on the information provided" are normal and were removed
+//       because they produced false positives that blocked valid responses.
 const FORBIDDEN_PHRASES = [
   /IMPORTANT RULES/i,
   /\bthe context below\b/i,
@@ -19,15 +22,7 @@ const FORBIDDEN_PHRASES = [
   /Layer \d+:/i,
   /RAG_SYSTEM_PROMPT/i,
   /sanitize\(/i,
-  /retrieve.*document/i,
-  /<\/?(?:user|assistant|system)>/i,
-  // Meta-language patterns that make responses sound robotic
-  /based on the information provided/i,
-  /according to the context/i,
-  /from what I can see in the/i,
-  /the context (?:shows|indicates|mentions)/i,
-  /as (?:per|stated in) the (?:context|information|document)/i,
-  /from the (?:information|details|context) (?:provided|given)/i
+  /<\/?(?:user|assistant|system)>/i
 ]
 
 // Prohibited financial advice patterns

@@ -15,8 +15,10 @@ import { validateStreamingToken, validateOutput } from '../middleware/outputVali
  */
 export async function streamResponse(prompt, res) {
   const ollamaUrl = `${process.env.OLLAMA_BASE_URL}/api/generate`
-  console.log(`Calling Ollama at: ${ollamaUrl}`)
-  console.log(`Using model: ${process.env.OLLAMA_MODEL}`)
+  const streamStart = Date.now()
+  console.log(`  [ollama] url          : ${ollamaUrl}`)
+  console.log(`  [ollama] model        : ${process.env.OLLAMA_MODEL}`)
+  console.log(`  [ollama] prompt length: ${prompt.length} chars`)
 
   try {
     const response = await fetch(ollamaUrl, {
@@ -27,7 +29,8 @@ export async function streamResponse(prompt, res) {
         prompt: prompt,
         stream: true,
         options: {
-          temperature: OLLAMA.TEMPERATURE
+          temperature: OLLAMA.TEMPERATURE,
+          num_predict: 900
         }
       })
     })
@@ -37,9 +40,10 @@ export async function streamResponse(prompt, res) {
       throw new Error(`Ollama API error (${response.status}): ${errorText}`)
     }
 
-    console.log('Got Ollama response, starting to stream tokens...')
+    console.log(`  [ollama] HTTP response OK — streaming tokens...`)
 
     let fullResponse = ''
+    let tokenCount = 0
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
 
@@ -59,11 +63,12 @@ export async function streamResponse(prompt, res) {
             // Validate streaming token before sending
             const validation = validateStreamingToken(data.response)
             if (!validation.valid) {
-              console.error('🚨 Blocked invalid streaming token')
+              console.error(`  [ollama] blocked invalid token at position ${fullResponse.length}`)
               continue // Skip this token
             }
 
             fullResponse += data.response
+            tokenCount++
             try {
               res.write(`data: ${JSON.stringify({ token: data.response })}\n\n`)
               if (res.flush) {
@@ -71,19 +76,25 @@ export async function streamResponse(prompt, res) {
               }
             } catch (writeError) {
               // Client disconnected, but continue to accumulate response for DB
-              console.log('Write error (client may have disconnected):', writeError.message)
+              console.log('  [ollama] write error (client may have disconnected):', writeError.message)
             }
           }
         } catch (e) {
-          console.error('Failed to parse Ollama response:', line)
+          console.error('  [ollama] failed to parse line:', line)
         }
       }
+    }
+
+    const elapsed = Date.now() - streamStart
+    console.log(`  [ollama] stream done — ${tokenCount} tokens, ${fullResponse.length} chars, ${elapsed}ms`)
+    if (fullResponse.length > 0) {
+      console.log(`  [ollama] response preview: "${fullResponse.slice(0, 120).replace(/\n/g, ' ')}${fullResponse.length > 120 ? '…' : ''}"`)
     }
 
     // Validate complete response before returning
     const validation = validateOutput(fullResponse)
     if (!validation.valid) {
-      console.error('🚨 Complete response validation failed:', validation.error)
+      console.error(`  [ollama] VALIDATION FAILED: ${validation.error}`)
       // Notify client to discard streamed tokens and show sanitized fallback instead
       try {
         res.write(`data: ${JSON.stringify({ error: 'response_filtered', message: validation.sanitized })}\n\n`)
@@ -94,7 +105,7 @@ export async function streamResponse(prompt, res) {
 
     return validation.text || fullResponse
   } catch (error) {
-    console.error('Ollama streaming error:', error.message)
+    console.error('  [ollama] streaming error:', error.message)
     throw new Error(`Failed to stream from Ollama: ${error.message}`)
   }
 }
