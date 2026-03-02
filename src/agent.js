@@ -413,14 +413,17 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     // For "list all products" type queries, if overview.md is the top retrieved doc,
     // return its content directly without LLM generation. A 1B model cannot reliably
     // enumerate all 5 products from context; returning the source doc is 100% accurate.
+    // NOTE: These patterns must be MORE SPECIFIC than comparison patterns to avoid false matches.
+    //       "Which cards are good for X?" should NOT match listing, only "Which cards do you offer?"
     const LISTING_QUERY_PATTERNS = [
-      /what (credit )?cards? (do you|does moneyHero|are|you) (offer|have|provide|available)/i,
-      /which cards? (do you|does moneyHero|are|you)/i,
-      /list (all |the )?(credit )?cards?/i,
-      /tell me (about |all )?((the )?cards?|products?)/i,
-      /what products? (do you|are)/i,
+      /what (credit )?cards? (do you|does moneyHero) (offer|have|provide)/i,
+      /which cards? (do you|does moneyHero) (offer|have|provide)/i,
+      /list (all |the |your )?(credit )?cards?/i,
+      /tell me (about |all )?(your |the )?(cards?|products?)/i,
+      /what products? (do you|does moneyHero) (offer|have|provide)/i,
       /available cards?/i,
-      /cards? (you offer|you have|available)/i
+      /cards? (you offer|you have|moneyHero offers)/i,
+      /^what (are )?((your|the) )?cards?$/i
     ]
     const isListingQuery = LISTING_QUERY_PATTERNS.some(p => p.test(message))
     const topDoc = dedupedDocs[0]?.[0]
@@ -529,8 +532,8 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       /cards? (with|that have|that offer|that come with|that include|that let|that allow)/i,
       /which of (the |your )?cards?/i,
       /best card(s)? for/i,
-      /which card(s)? is best/i,
-      /what card(s)? (is|are) (best|good|great|ideal)/i,
+      /which card(s)? (is|are) (best|good|great|ideal|perfect|suitable|recommended)/i,
+      /what card(s)? (is|are) (best|good|great|ideal|perfect|suitable|recommended)/i,
       /card(s)? (that (earn|give|offer|have)|for earning|to earn)/i,
       /earn (miles|cashback|rewards|points) (with|using|on)/i,
       /cards? for (travel|dining|cashback|miles|rewards|online|petrol|groceries|shopping|entertainment)/i,
@@ -644,11 +647,29 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
           .split(/\s+/)
           .filter(w => w.length > 2 && !STOP_WORDS.has(w))
 
-        // Score each bullet by number of feature word hits
+        // Expand feature words with domain synonyms to improve matching
+        // Example: "travel" should also match cards mentioning "miles", "airline", "flyer"
+        const FEATURE_SYNONYMS = {
+          travel: ['miles', 'airline', 'flyer', 'flight', 'airport', 'krisflyer'],
+          dining: ['restaurant', 'food', 'eating', 'meal'],
+          shopping: ['retail', 'purchase', 'buying'],
+          cashback: ['rebate', 'refund'],
+          online: ['internet', 'ecommerce', 'digital']
+        }
+        
+        const expandedFeatureWords = new Set(featureWords)
+        for (const word of featureWords) {
+          if (FEATURE_SYNONYMS[word]) {
+            FEATURE_SYNONYMS[word].forEach(syn => expandedFeatureWords.add(syn))
+          }
+        }
+        const matchWords = Array.from(expandedFeatureWords)
+
+        // Score each bullet by number of feature word hits (using expanded synonyms)
         const scoredBullets = cardBullets
           .map(bullet => ({
             bullet,
-            score: featureWords.filter(w => bullet.toLowerCase().includes(w)).length
+            score: matchWords.filter(w => bullet.toLowerCase().includes(w)).length
           }))
           .filter(x => x.score > 0)
           .sort((a, b) => b.score - a.score)
