@@ -158,14 +158,14 @@ async function classifyIntent(message) {
   // Use Ollama /api/generate with zero-shot classification to prevent prompt injection.
   // User message is properly delimited and sanitized to prevent breaking out of the message context.
   // The format makes it clear that everything after "message:" is untrusted user input.
-  
+
   // Sanitize message: remove quotes, newlines, and limit length
   const sanitizedMsg = message
-    .replace(/["\n\r]/g, ' ')  // Remove quotes and newlines
-    .replace(/[→←↑↓]/g, '')     // Remove arrow characters used in prompt
-    .slice(0, 200)               // Limit length
+    .replace(/["\n\r]/g, ' ') // Remove quotes and newlines
+    .replace(/[→←↑↓]/g, '') // Remove arrow characters used in prompt
+    .slice(0, 200) // Limit length
     .trim()
-  
+
   const classifyPrompt = `Classify this customer message into ONE category: answer, escalate, or off_topic.
 
 answer = questions about credit cards or personal loans (features, rates, eligibility, applications)
@@ -205,7 +205,11 @@ category:`
       if (done) break
       const chunk = dec.decode(value, { stream: true })
       for (const line of chunk.split('\n').filter(Boolean)) {
-        try { raw += (JSON.parse(line).response || '') } catch { /* skip */ }
+        try {
+          raw += JSON.parse(line).response || ''
+        } catch {
+          /* skip */
+        }
       }
     }
     reader.cancel()
@@ -229,7 +233,9 @@ category:`
       confidence = 0.3
     }
 
-    console.log(`  [classify] intent=${intent} confidence=${confidence.toFixed(2)} raw="${raw}" (${Date.now() - classifyStart}ms)`)
+    console.log(
+      `  [classify] intent=${intent} confidence=${confidence.toFixed(2)} raw="${raw}" (${Date.now() - classifyStart}ms)`
+    )
     return { intent, confidence }
   } catch (error) {
     console.error(`  [classify] error: ${error.message} (${Date.now() - classifyStart}ms)`)
@@ -251,9 +257,16 @@ function detectQueryCategory(message) {
     kw => lower.includes(kw)
   )
 
-  const isAboutCards = ['card', 'cashback', 'miles', 'rewards', 'annual fee', 'krisflyer', 'live fresh', 'revolution'].some(
-    kw => lower.includes(kw)
-  )
+  const isAboutCards = [
+    'card',
+    'cashback',
+    'miles',
+    'rewards',
+    'annual fee',
+    'krisflyer',
+    'live fresh',
+    'revolution'
+  ].some(kw => lower.includes(kw))
 
   // Only filter when the signal is unambiguous — mixed or neutral queries get all categories
   if (isAboutLoans && !isAboutCards) return 'personal-loans'
@@ -291,7 +304,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     console.log('  [retrieval] searching vectorstore...')
     const retrievalStart = Date.now()
     const candidateDocs = await store.similaritySearchWithScore(message, 20)
-    console.log(`  [retrieval] got ${candidateDocs.length} candidates in ${Date.now() - retrievalStart}ms`)
+    console.log(
+      `  [retrieval] got ${candidateDocs.length} candidates in ${Date.now() - retrievalStart}ms`
+    )
 
     // Gate 1: vectorstore empty or retrieval failed completely
     if (candidateDocs.length === 0) {
@@ -308,39 +323,47 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     // Specific queries (e.g., "What is HSBC annual fee?") need tighter threshold for accuracy
     // Broad queries (e.g., "What cards do you offer?") need looser threshold for recall
     const lowerMsg = message.toLowerCase()
-    
+
     // Detect query type for adaptive threshold
-    const isSpecificQuery = /\b(what is|how much|when|where|who)\b/i.test(message) ||
-                            /\b(fee|rate|income|age|requirement|eligibility)\b/i.test(message)
+    const isSpecificQuery =
+      /\b(what is|how much|when|where|who)\b/i.test(message) ||
+      /\b(fee|rate|income|age|requirement|eligibility)\b/i.test(message)
     const isComparisonQuery = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
     const isBroadQuery = /\b(all|list|available|offer|have|what cards|what loans)\b/i.test(message)
-    
+
     // Set threshold based on query type
     let MAX_DISTANCE_THRESHOLD
     if (isSpecificQuery) {
-      MAX_DISTANCE_THRESHOLD = 0.35  // Tight threshold for specific factual queries
+      MAX_DISTANCE_THRESHOLD = 0.35 // Tight threshold for specific factual queries
     } else if (isComparisonQuery) {
-      MAX_DISTANCE_THRESHOLD = 0.45  // Medium threshold for comparisons
+      MAX_DISTANCE_THRESHOLD = 0.45 // Medium threshold for comparisons
     } else if (isBroadQuery) {
-      MAX_DISTANCE_THRESHOLD = 0.55  // Loose threshold for broad catalog queries
+      MAX_DISTANCE_THRESHOLD = 0.55 // Loose threshold for broad catalog queries
     } else {
-      MAX_DISTANCE_THRESHOLD = 0.40  // Default: moderately strict
+      MAX_DISTANCE_THRESHOLD = 0.4 // Default: moderately strict
     }
-    
+
     const filteredDocs = candidateDocs.filter(([, score]) => score <= MAX_DISTANCE_THRESHOLD)
 
     // ── LAYER 4: Source logging ───────────────────────────────────────────────
-    console.log(`  [retrieval] query type: ${isSpecificQuery ? 'specific' : isComparisonQuery ? 'comparison' : isBroadQuery ? 'broad' : 'default'}`)
+    console.log(
+      `  [retrieval] query type: ${isSpecificQuery ? 'specific' : isComparisonQuery ? 'comparison' : isBroadQuery ? 'broad' : 'default'}`
+    )
     console.log(`  [retrieval] threshold: ${MAX_DISTANCE_THRESHOLD}`)
     console.log(`  [retrieval] query: "${message.slice(0, 80)}"`)
     console.log(
       `  [retrieval] candidates (top 10):`,
-      candidateDocs.slice(0, 10).map(
-        ([doc, score]) =>
-          `${doc.metadata?.source?.split('/').pop() || 'unknown'}(${score.toFixed(3)})`
-      ).join(', ')
+      candidateDocs
+        .slice(0, 10)
+        .map(
+          ([doc, score]) =>
+            `${doc.metadata?.source?.split('/').pop() || 'unknown'}(${score.toFixed(3)})`
+        )
+        .join(', ')
     )
-    console.log(`  [retrieval] score filter ≤${MAX_DISTANCE_THRESHOLD}: ${filteredDocs.length}/${candidateDocs.length} docs passed`)
+    console.log(
+      `  [retrieval] score filter ≤${MAX_DISTANCE_THRESHOLD}: ${filteredDocs.length}/${candidateDocs.length} docs passed`
+    )
 
     if (filteredDocs.length === 0) {
       console.log(`  [retrieval] ALL docs filtered out — no relevant content found`)
@@ -367,7 +390,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     )
 
     if (categoryFilteredDocs.length === 0) {
-      console.log(`  [retrieval] category filter removed all results — no ${queryCategory} docs in range`)
+      console.log(
+        `  [retrieval] category filter removed all results — no ${queryCategory} docs in range`
+      )
       if (streaming) throw new Error('NO_RELEVANT_DOCS')
       return {
         reply:
@@ -409,15 +434,17 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       // Read overview.md from disk instead of stitching vector store chunks.
       // Chunks for individual card bullets may score beyond the top-20 similarity results,
       // so the vector store path is unreliable for complete catalog listings.
-      const overviewSrc = topDoc.metadata?.source  // e.g. "credit-cards/overview.md"
+      const overviewSrc = topDoc.metadata?.source // e.g. "credit-cards/overview.md"
       const overviewFilePath = join(projectRoot, 'docs', overviewSrc)
       let overviewContent
       try {
         overviewContent = readFileSync(overviewFilePath, 'utf8')
-          .replace(/^#[^\n]*\n/m, '')  // Remove leading H1
+          .replace(/^#[^\n]*\n/m, '') // Remove leading H1
           .trim()
       } catch (readErr) {
-        console.warn(`  [retrieval] could not read ${overviewFilePath}: ${readErr.message} — falling through to LLM`)
+        console.warn(
+          `  [retrieval] could not read ${overviewFilePath}: ${readErr.message} — falling through to LLM`
+        )
         overviewContent = null
       }
 
@@ -445,7 +472,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       /what (personal )?loans? (do you|does) (offer|have|provide)/i,
       /available (personal )?loans?/i,
       /(what|which) loans? (do you|are|you) (offer|have|provide|available)/i,
-      /loans? (you offer|you have|available)/i,
+      /loans? (you offer|you have|available)/i
     ]
     const isLoanListingQuery = LOAN_LISTING_PATTERNS.some(p => p.test(message))
 
@@ -487,7 +514,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     // Priority order: comparison shortcut → card-name routing → vector fallback
     let context
     let docSources
-    const lowerMsg = message.toLowerCase()
+    // Reuse lowerMsg from adaptive threshold section above
 
     const sanitizeCtx = text =>
       text
@@ -515,7 +542,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
       /what ones? (are|have|offer|come with|include|give|provide|support|let|allow)/i,
       /which ones? (is|are) (best|good|great|ideal|perfect) for/i,
       /ones? (good|great|best|ideal|perfect) for/i,
-      /ones? (with|that have|that offer|that include|that let|that support)/i,
+      /ones? (with|that have|that offer|that include|that let|that support)/i
     ]
     const isComparisonQuery = COMPARISON_QUERY_PATTERNS.some(p => p.test(message))
 
@@ -527,30 +554,80 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
         // Extract per-card bullet points from the "## Available Credit Cards" section
         const sectionStart = overviewRaw.indexOf('## Available Credit Cards')
         const sectionEnd = overviewRaw.indexOf('\n## ', sectionStart + 1)
-        const bulletSection = sectionStart !== -1
-          ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
-          : overviewRaw
+        const bulletSection =
+          sectionStart !== -1
+            ? overviewRaw.slice(sectionStart, sectionEnd !== -1 ? sectionEnd : undefined)
+            : overviewRaw
 
         // Each card is a markdown bullet starting with "- **Card Name**"
         const cardBullets = bulletSection.match(/^- \*\*[^*]+\*\*.+$/gm) || []
 
         // Extract feature keywords from the query (strip common stop words)
         const STOP_WORDS = new Set([
-          'what', 'which', 'card', 'cards', 'come', 'with', 'offer', 'have', 'does',
-          'do', 'you', 'the', 'that', 'for', 'are', 'give', 'best', 'most', 'any',
-          'can', 'include', 'provide', 'support', 'me', 'tell', 'show', 'list', 'get',
-          'is', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'to', 'by', 'from', 'into',
+          'what',
+          'which',
+          'card',
+          'cards',
+          'come',
+          'with',
+          'offer',
+          'have',
+          'does',
+          'do',
+          'you',
+          'the',
+          'that',
+          'for',
+          'are',
+          'give',
+          'best',
+          'most',
+          'any',
+          'can',
+          'include',
+          'provide',
+          'support',
+          'me',
+          'tell',
+          'show',
+          'list',
+          'get',
+          'is',
+          'a',
+          'an',
+          'and',
+          'or',
+          'of',
+          'in',
+          'on',
+          'to',
+          'by',
+          'from',
+          'into',
           // Follow-up / filler words that appear in "which ones are good for X?" queries
-          'ones', 'one', 'good', 'great', 'ideal', 'perfect', 'better', 'nice', 'well'
+          'ones',
+          'one',
+          'good',
+          'great',
+          'ideal',
+          'perfect',
+          'better',
+          'nice',
+          'well'
         ])
-        const featureWords = lowerMsg.replace(/[^a-z\s]/g, '').split(/\s+/)
+        const featureWords = lowerMsg
+          .replace(/[^a-z\s]/g, '')
+          .split(/\s+/)
           .filter(w => w.length > 2 && !STOP_WORDS.has(w))
 
         // Score each bullet by number of feature word hits
-        const scoredBullets = cardBullets.map(bullet => ({
-          bullet,
-          score: featureWords.filter(w => bullet.toLowerCase().includes(w)).length
-        })).filter(x => x.score > 0).sort((a, b) => b.score - a.score)
+        const scoredBullets = cardBullets
+          .map(bullet => ({
+            bullet,
+            score: featureWords.filter(w => bullet.toLowerCase().includes(w)).length
+          }))
+          .filter(x => x.score > 0)
+          .sort((a, b) => b.score - a.score)
 
         // Only return bullets at the highest score to avoid false positives.
         // Example: "cashback on dining" has feature words [cashback, dining].
@@ -560,11 +637,14 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
 
         if (topBullets.length > 0) {
           const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
-          const intro = topBullets.length === 1
-            ? 'One card matches your query:'
-            : `${topBullets.length} cards match your query:`
+          const intro =
+            topBullets.length === 1
+              ? 'One card matches your query:'
+              : `${topBullets.length} cards match your query:`
           const directAnswer = `${intro}\n\n${matchedCards}`
-          console.log(`  [retrieval] comparison match → ${topBullets.length} card(s) from overview.md`)
+          console.log(
+            `  [retrieval] comparison match → ${topBullets.length} card(s) from overview.md`
+          )
           docSources = [overviewSrc]
           const memory = getSessionMemory(sessionId)
           if (streaming) return { directReply: directAnswer, memory, sources: docSources }
@@ -575,7 +655,9 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
         // No keyword match — fall back to LLM with full overview.md as context
         context = sanitizeCtx(overviewRaw)
         docSources = [overviewSrc]
-        console.log(`  [retrieval] comparison query → no keyword match, LLM fallback with overview.md`)
+        console.log(
+          `  [retrieval] comparison query → no keyword match, LLM fallback with overview.md`
+        )
       } catch (e) {
         console.warn(`  [retrieval] could not read overview.md: ${e.message} — falling through`)
       }
@@ -585,13 +667,19 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     // A specific card is mentioned — read that card's doc from disk so fee tables
     // and other chunks that score poorly in vector search are always reachable.
     const CARD_DOC_MAP = {
-      hsbc: 'hsbc-revolution.md', revolution: 'hsbc-revolution.md',
-      citi: 'citi-cashback-plus.md', 'cashback plus': 'citi-cashback-plus.md',
-      'dbs live fresh': 'dbs-live-fresh.md', 'live fresh': 'dbs-live-fresh.md',
+      hsbc: 'hsbc-revolution.md',
+      revolution: 'hsbc-revolution.md',
+      citi: 'citi-cashback-plus.md',
+      'cashback plus': 'citi-cashback-plus.md',
+      'dbs live fresh': 'dbs-live-fresh.md',
+      'live fresh': 'dbs-live-fresh.md',
       dbs: 'dbs-live-fresh.md',
-      ocbc: 'ocbc-365.md', '365': 'ocbc-365.md',
-      uob: 'uob-krisflyer.md', krisflyer: 'uob-krisflyer.md',
-      'standard chartered': 'standard-chartered-cashone.md', cashone: 'standard-chartered-cashone.md',
+      ocbc: 'ocbc-365.md',
+      365: 'ocbc-365.md',
+      uob: 'uob-krisflyer.md',
+      krisflyer: 'uob-krisflyer.md',
+      'standard chartered': 'standard-chartered-cashone.md',
+      cashone: 'standard-chartered-cashone.md'
     }
     const targetFile = Object.entries(CARD_DOC_MAP).find(([kw]) => lowerMsg.includes(kw))?.[1]
 
@@ -606,10 +694,30 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
         // value (e.g. S$150 in a fee table) isn't buried under prose.
         const qLower = message.toLowerCase()
         const SECTION_KEYWORDS = [
-          { keywords: ['fee', 'charge', 'cost', 'annual', 'interest', 'late payment', 'cash advance'], heading: '## Fees' },
-          { keywords: ['eligib', 'income', 'qualify', 'requirement', 'who can apply'], heading: '## Eligibility' },
-          { keywords: ['apply', 'application', 'how to get', 'sign up'], heading: '## How to Apply' },
-          { keywords: ['benefit', 'reward', 'cashback', 'miles', 'point', 'perk'], heading: '## Key Benefits' },
+          {
+            keywords: [
+              'fee',
+              'charge',
+              'cost',
+              'annual',
+              'interest',
+              'late payment',
+              'cash advance'
+            ],
+            heading: '## Fees'
+          },
+          {
+            keywords: ['eligib', 'income', 'qualify', 'requirement', 'who can apply'],
+            heading: '## Eligibility'
+          },
+          {
+            keywords: ['apply', 'application', 'how to get', 'sign up'],
+            heading: '## How to Apply'
+          },
+          {
+            keywords: ['benefit', 'reward', 'cashback', 'miles', 'point', 'perk'],
+            heading: '## Key Benefits'
+          }
         ]
         const matchedSection = SECTION_KEYWORDS.find(({ keywords }) =>
           keywords.some(kw => qLower.includes(kw))
@@ -620,23 +728,27 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
           // Extract just the matched section
           const sectionStart = rawCard.indexOf(matchedSection.heading)
           if (sectionStart !== -1) {
-            const nextHeading = rawCard.indexOf('\n## ', sectionStart + matchedSection.heading.length)
-            cardContent = nextHeading !== -1
-              ? rawCard.slice(sectionStart, nextHeading).trim()
-              : rawCard.slice(sectionStart).trim()
+            const nextHeading = rawCard.indexOf(
+              '\n## ',
+              sectionStart + matchedSection.heading.length
+            )
+            cardContent =
+              nextHeading !== -1
+                ? rawCard.slice(sectionStart, nextHeading).trim()
+                : rawCard.slice(sectionStart).trim()
 
             // Convert markdown table rows to plain "Key: Value" lines so the 1B model
             // can extract specific amounts without struggling with | pipe syntax.
-            cardContent = cardContent.replace(
-              /^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/gm,
-              (_, key, val) => {
+            cardContent = cardContent
+              .replace(/^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/gm, (_, key, val) => {
                 const k = key.trim()
                 const v = val.trim()
                 // Skip header/divider rows (empty or dash-only values)
                 if (!k || /^[-:]+$/.test(v)) return ''
                 return `${k}: ${v}`
-              }
-            ).replace(/\n{3,}/g, '\n\n').trim()
+              })
+              .replace(/\n{3,}/g, '\n\n')
+              .trim()
 
             // For the Fees section: try to find the exact line matching the query
             // and return it as a directReply, bypassing the LLM.
@@ -646,23 +758,36 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
               const lines = cardContent.split('\n').filter(l => {
                 if (!l.includes(': ')) return false
                 const [k, v] = l.split(': ')
-                return k.trim().toLowerCase() !== 'fee type' && v && v.trim().toLowerCase() !== 'amount'
+                return (
+                  k.trim().toLowerCase() !== 'fee type' && v && v.trim().toLowerCase() !== 'amount'
+                )
               })
-              const qWords = qLower.replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2)
+              const qWords = qLower
+                .replace(/[^a-z\s]/g, '')
+                .split(/\s+/)
+                .filter(w => w.length > 2)
               // Score each line by how many query words it contains — pick the best match
-              const scored = lines.map(l => ({
-                line: l,
-                score: qWords.filter(w => l.toLowerCase().includes(w)).length
-              })).filter(x => x.score > 0).sort((a, b) => b.score - a.score)
+              const scored = lines
+                .map(l => ({
+                  line: l,
+                  score: qWords.filter(w => l.toLowerCase().includes(w)).length
+                }))
+                .filter(x => x.score > 0)
+                .sort((a, b) => b.score - a.score)
               const matchedLine = scored[0]?.line
               if (matchedLine) {
                 const colonIdx = matchedLine.indexOf(': ')
                 const feeKey = matchedLine.slice(0, colonIdx).trim()
                 const feeVal = matchedLine.slice(colonIdx + 2).trim()
                 // Reconstruct a human-friendly card name from the filename
-                const cardDisplayName = targetFile.replace('.md', '').split('-')
-                  .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-                  .replace('Hsbc', 'HSBC').replace('Dbs', 'DBS').replace('Uob', 'UOB')
+                const cardDisplayName = targetFile
+                  .replace('.md', '')
+                  .split('-')
+                  .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+                  .join(' ')
+                  .replace('Hsbc', 'HSBC')
+                  .replace('Dbs', 'DBS')
+                  .replace('Uob', 'UOB')
                   .replace('Ocbc', 'OCBC')
                 const directAnswer = `The ${feeKey} for the ${cardDisplayName} is ${feeVal}.`
                 console.log(`  [retrieval] fee line match → direct answer: "${directAnswer}"`)
@@ -674,15 +799,21 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
               }
             }
 
-            console.log(`  [retrieval] extracted section "${matchedSection.heading}" (${cardContent.length} chars, table→plaintext)`)
+            console.log(
+              `  [retrieval] extracted section "${matchedSection.heading}" (${cardContent.length} chars, table→plaintext)`
+            )
           }
         }
 
         context = sanitizeCtx(cardContent)
         docSources = [cardSrc]
-        console.log(`  [retrieval] card-name routing → ${targetFile} (disk read, ${context.length} chars)`)
+        console.log(
+          `  [retrieval] card-name routing → ${targetFile} (disk read, ${context.length} chars)`
+        )
       } catch (readErr) {
-        console.warn(`  [retrieval] could not read ${cardFilePath}: ${readErr.message} — falling back to vector store`)
+        console.warn(
+          `  [retrieval] could not read ${cardFilePath}: ${readErr.message} — falling back to vector store`
+        )
       }
     }
 
@@ -690,30 +821,34 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     if (!context) {
       const relevantDocs = dedupedDocs.slice(0, 1).map(([doc]) => doc)
       docSources = relevantDocs.map(doc => doc.metadata?.source || 'unknown')
-      console.log(`  [retrieval] using top-scored doc: [${docSources.map(s => s.split('/').pop()).join(', ')}]`)
+      console.log(
+        `  [retrieval] using top-scored doc: [${docSources.map(s => s.split('/').pop()).join(', ')}]`
+      )
       context = relevantDocs.map(doc => sanitizeCtx(doc.pageContent)).join('\n\n---\n\n')
     }
 
     // Get conversation history with token-based limiting
     const memory = getSessionMemory(sessionId)
     const historyMessages = await memory.chatHistory.getMessages()
-    
+
     // Cap history by tokens (not just message count) to prevent context overflow
     let tokenCount = 0
     const cappedHistory = []
     for (let i = historyMessages.length - 1; i >= 0; i--) {
       const msg = historyMessages[i]
       const msgTokens = estimateTokens(msg.content)
-      
+
       if (tokenCount + msgTokens > MAX_HISTORY_TOKENS) {
         break // Stop adding history if we exceed token limit
       }
-      
+
       cappedHistory.unshift(msg) // Add to front to maintain chronological order
       tokenCount += msgTokens
     }
-    
-    console.log(`  [context] history: ${cappedHistory.length} msgs (~${tokenCount} tokens) | context: ${context.length} chars (~${estimateTokens(context)} tokens)`)
+
+    console.log(
+      `  [context] history: ${cappedHistory.length} msgs (~${tokenCount} tokens) | context: ${context.length} chars (~${estimateTokens(context)} tokens)`
+    )
 
     // ── LAYER 1: Fill placeholders in strict RAG prompt ──────────────────────
     // Enhanced sanitization to prevent prompt injection attacks
@@ -766,7 +901,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     let reply = typeof rawReply === 'string' ? rawReply : (rawReply.content ?? String(rawReply))
 
     console.log(`Response generated successfully (${reply.length} chars)`)
-    
+
     // Validate response for hallucination, fabrication, and inappropriate advice
     const validation = validateFinancialResponse(reply, context)
     if (!validation.valid) {
@@ -776,7 +911,7 @@ async function handleAnswerIntent(sessionId, message, llm, streaming = false) {
     } else {
       console.log(`✓ Response validated successfully`)
     }
-    
+
     console.log(`Sources: [${docSources.join(', ')}]`)
 
     // Save conversation to memory
@@ -871,18 +1006,54 @@ async function processChat(sessionId, message, streaming) {
   // Step 2a: Keyword pre-check for financial product queries — deterministic and fast.
   // The 1B LLM is unreliable for these clear-signal cases; keywords are exact matches.
   const ANSWER_KEYWORDS = [
-    'credit card', 'debit card', 'annual fee', 'cashback', 'cash back',
-    'rewards', 'miles', 'krisflyer', 'kris flyer', 'live fresh', 'revolution',
-    'cashback plus', '365 card', 'ocbc 365', 'uob ', 'dbs ', 'hsbc', 'citi',
-    'standard chartered', 'personal loan', 'borrow', 'borrowing', 'repayment',
-    'installment', 'instalment', 'interest rate', 'cashone', 'cash one',
-    'apply for', 'eligibility', 'minimum income', 'annual income',
-    'what cards', 'which card', 'what loans', 'which loan',
-    'offers', 'available cards', 'available loans', 'card comparison',
-    'compare cards', 'compare loans', 'best card', 'best loan',
+    'credit card',
+    'debit card',
+    'annual fee',
+    'cashback',
+    'cash back',
+    'rewards',
+    'miles',
+    'krisflyer',
+    'kris flyer',
+    'live fresh',
+    'revolution',
+    'cashback plus',
+    '365 card',
+    'ocbc 365',
+    'uob ',
+    'dbs ',
+    'hsbc',
+    'citi',
+    'standard chartered',
+    'personal loan',
+    'borrow',
+    'borrowing',
+    'repayment',
+    'installment',
+    'instalment',
+    'interest rate',
+    'cashone',
+    'cash one',
+    'apply for',
+    'eligibility',
+    'minimum income',
+    'annual income',
+    'what cards',
+    'which card',
+    'what loans',
+    'which loan',
+    'offers',
+    'available cards',
+    'available loans',
+    'card comparison',
+    'compare cards',
+    'compare loans',
+    'best card',
+    'best loan',
     // Follow-up queries ("which ones are good for travel?") — route to answer
     // so COMPARISON_QUERY_PATTERNS can handle them without hitting the LLM classifier
-    'which ones', 'what ones'
+    'which ones',
+    'what ones'
   ]
   const isFinancialQuery = ANSWER_KEYWORDS.some(kw => lowerMessage.includes(kw))
   if (isFinancialQuery) {
@@ -895,11 +1066,28 @@ async function processChat(sessionId, message, streaming) {
   // Step 2b: Keyword pre-check for clearly off-topic queries.
   // Same reasoning as answer keywords — the 1B model misclassifies common finance-adjacent topics.
   const OFF_TOPIC_KEYWORDS = [
-    'mutual fund', 'stock market', 'share market', 'equit', 'etf ',
-    'bitcoin', 'crypto', 'ethereum', 'nft', 'forex', 'fx trading',
-    'insurance', 'life cover', 'health plan',
-    'weather', 'cooking', 'recipe', 'sports', 'travel tip',
-    'invest in', 'should i buy', 'portfolio'
+    'mutual fund',
+    'stock market',
+    'share market',
+    'equit',
+    'etf ',
+    'bitcoin',
+    'crypto',
+    'ethereum',
+    'nft',
+    'forex',
+    'fx trading',
+    'insurance',
+    'life cover',
+    'health plan',
+    'weather',
+    'cooking',
+    'recipe',
+    'sports',
+    'travel tip',
+    'invest in',
+    'should i buy',
+    'portfolio'
   ]
   const isOffTopic = OFF_TOPIC_KEYWORDS.some(kw => lowerMessage.includes(kw))
   if (isOffTopic) {
@@ -917,7 +1105,9 @@ async function processChat(sessionId, message, streaming) {
   // The retrieval gate (score threshold) prevents hallucination even when intent is uncertain.
   const LOW_CONFIDENCE_THRESHOLD = 0.3
   if (confidence < LOW_CONFIDENCE_THRESHOLD) {
-    console.warn(`⚠️  Low confidence (${confidence.toFixed(2)}) — attempting RAG retrieval as fallback`)
+    console.warn(
+      `⚠️  Low confidence (${confidence.toFixed(2)}) — attempting RAG retrieval as fallback`
+    )
     const result = await handleAnswerIntent(sessionId, message, llm, streaming)
     if (streaming) return { ...result, intent: 'answer', confidence }
     return { reply: result.reply, intent: 'answer', sources: result.sources, confidence }

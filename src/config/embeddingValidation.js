@@ -39,8 +39,10 @@ export async function checkOllamaModel(modelName, ollamaBaseUrl) {
     if (!hasModel) {
       // Also check without tag normalization for :latest case
       const normalizedTarget = normalizeModelName(modelName)
-      const hasNormalizedModel = data.models?.some(m => normalizeModelName(m.name) === normalizedTarget)
-      
+      const hasNormalizedModel = data.models?.some(
+        m => normalizeModelName(m.name) === normalizedTarget
+      )
+
       if (!hasNormalizedModel) {
         // List available models for debugging
         const available = data.models?.map(m => m.name).join(', ') || 'none'

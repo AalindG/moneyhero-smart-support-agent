@@ -36,13 +36,13 @@ const BOLD_PRODUCTS = [
   'UOB KrisFlyer',
   'DBS CashOne',
   'Standard Chartered CashOne',
-  'CashOne',
+  'CashOne'
 ]
 
 const BOLD_TERMS = [
   /(\d+(?:\.\d+)?%\s*(?:cashback|p\.a\.|per annum|miles?|interest|EIR|APR))/gi,
   /(S\$[\d,]+(?:\.\d+)?)/gi,
-  /(\d+x\s+(?:points?|miles?))/gi,
+  /(\d+x\s+(?:points?|miles?))/gi
 ]
 
 /**
@@ -170,7 +170,7 @@ const PROFANITY_PATTERNS = [
 export function checkProfanity(text) {
   let hasProfanity = false
   let sanitized = text
-  
+
   for (const pattern of PROFANITY_PATTERNS) {
     if (pattern.test(text)) {
       hasProfanity = true
@@ -181,7 +181,7 @@ export function checkProfanity(text) {
       })
     }
   }
-  
+
   return { hasProfanity, sanitized }
 }
 
@@ -192,7 +192,7 @@ export function checkProfanity(text) {
  */
 export function filterInputMessage(message) {
   const profanityCheck = checkProfanity(message)
-  
+
   if (profanityCheck.hasProfanity) {
     return {
       allowed: false,
@@ -200,7 +200,7 @@ export function filterInputMessage(message) {
       reason: 'PROFANITY_DETECTED'
     }
   }
-  
+
   return {
     allowed: true,
     sanitized: message
@@ -214,16 +214,17 @@ export function filterInputMessage(message) {
  */
 export function sanitizeOutput(response) {
   const profanityCheck = checkProfanity(response)
-  
+
   // If LLM somehow generated profanity, return a safe fallback
   if (profanityCheck.hasProfanity) {
     console.error('⚠️ LLM response contained profanity - replacing with safe fallback')
     return {
       valid: false,
-      sanitized: "I apologize, but I can't provide that response. How can I help you with information about credit cards or personal loans?"
+      sanitized:
+        "I apologize, but I can't provide that response. How can I help you with information about credit cards or personal loans?"
     }
   }
-  
+
   return {
     valid: true,
     sanitized: response

@@ -56,26 +56,26 @@ function extractProductNames(text) {
  */
 function extractFinancialNumbers(text) {
   const numbers = []
-  
+
   // Match percentages: 8%, 25.9% p.a.
   const percentMatches = text.matchAll(/(\d+(?:\.\d+)?)\s*%/g)
   for (const match of percentMatches) {
     numbers.push(parseFloat(match[1]))
   }
-  
+
   // Match dollar amounts: S$30,000, $100
   const dollarMatches = text.matchAll(/[S$]\$?\s*(\d+(?:,\d{3})*(?:\.\d+)?)/g)
   for (const match of dollarMatches) {
     const cleaned = match[1].replace(/,/g, '')
     numbers.push(parseFloat(cleaned))
   }
-  
+
   // Match multipliers: 10x points
   const multiplierMatches = text.matchAll(/(\d+)x\s+(?:points?|miles?)/gi)
   for (const match of multiplierMatches) {
     numbers.push(parseInt(match[1]))
   }
-  
+
   return numbers
 }
 
@@ -88,11 +88,11 @@ function extractFinancialNumbers(text) {
 function checkProductHallucination(response, context) {
   const responseProducts = extractProductNames(response)
   const contextProducts = extractProductNames(context)
-  
+
   const hallucinated = responseProducts.filter(
     rp => !contextProducts.some(cp => cp.toLowerCase() === rp.toLowerCase())
   )
-  
+
   return {
     valid: hallucinated.length === 0,
     hallucinated
@@ -108,12 +108,12 @@ function checkProductHallucination(response, context) {
 function checkNumberFabrication(response, context) {
   const responseNumbers = extractFinancialNumbers(response)
   const contextNumbers = extractFinancialNumbers(context)
-  
+
   // Allow small variations due to rounding
   const suspicious = responseNumbers.filter(rn => {
     return !contextNumbers.some(cn => Math.abs(cn - rn) < 0.1)
   })
-  
+
   return {
     valid: suspicious.length === 0,
     suspicious
@@ -127,14 +127,14 @@ function checkNumberFabrication(response, context) {
  */
 function checkProhibitedAdvice(response) {
   const matches = []
-  
+
   for (const pattern of PROHIBITED_PATTERNS) {
     const found = response.match(pattern)
     if (found) {
       matches.push(...found)
     }
   }
-  
+
   return {
     valid: matches.length === 0,
     matches
@@ -151,32 +151,36 @@ export function validateFinancialResponse(response, context) {
   // Check 1: Product hallucination
   const productCheck = checkProductHallucination(response, context)
   if (!productCheck.valid) {
-    console.error(`❌ Validation failed: Hallucinated products: ${productCheck.hallucinated.join(', ')}`)
+    console.error(
+      `❌ Validation failed: Hallucinated products: ${productCheck.hallucinated.join(', ')}`
+    )
     return {
       valid: false,
       reason: 'HALLUCINATED_PRODUCTS',
       details: { products: productCheck.hallucinated }
     }
   }
-  
+
   // Check 2: Fabricated numbers
   const numberCheck = checkNumberFabrication(response, context)
   if (!numberCheck.valid && numberCheck.suspicious.length > 0) {
     console.warn(`⚠️  Validation warning: Suspicious numbers: ${numberCheck.suspicious.join(', ')}`)
     // Warning only - don't block, as some numbers might be reformatted (e.g., "30000" vs "30,000")
   }
-  
+
   // Check 3: Prohibited advice
   const adviceCheck = checkProhibitedAdvice(response)
   if (!adviceCheck.valid) {
-    console.error(`❌ Validation failed: Prohibited advice detected: ${adviceCheck.matches.join(', ')}`)
+    console.error(
+      `❌ Validation failed: Prohibited advice detected: ${adviceCheck.matches.join(', ')}`
+    )
     return {
       valid: false,
       reason: 'INAPPROPRIATE_ADVICE',
       details: { matches: adviceCheck.matches }
     }
   }
-  
+
   return { valid: true }
 }
 
@@ -188,14 +192,14 @@ export function validateFinancialResponse(response, context) {
  */
 export function getSafeFallback(response, failureReason) {
   console.log(`Returning safe fallback due to: ${failureReason}`)
-  
+
   if (failureReason === 'HALLUCINATED_PRODUCTS') {
     return "I apologize, but I'm not confident in the accuracy of my response. Would you like me to connect you with an advisor who can provide verified information?"
   }
-  
+
   if (failureReason === 'INAPPROPRIATE_ADVICE') {
     return "I can provide information about our credit cards and personal loans, but I'm not able to make recommendations about eligibility or approval. Would you like to speak with our team for personalized advice?"
   }
-  
+
   return "I'm having trouble generating an accurate response. Let me connect you with our support team for assistance."
 }
