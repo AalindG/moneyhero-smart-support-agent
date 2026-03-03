@@ -12,15 +12,18 @@ RAG-powered customer support chatbot for credit cards and personal loans. Built 
 **Prerequisites:** Docker Desktop running on your machine. Nothing else required.
 
 ```bash
-git clone <repo-url>
-cd moneyhero-backend
+git clone https://github.com/AalindG/moneyhero-smart-support-agent.git
+cd moneyhero-smart-support-agent
+cp .env.example .env
+# Optional: open .env and set ANTHROPIC_API_KEY + USE_CLAUDE=true for Claude as primary LLM.
+# Without it the system runs entirely on Ollama (llama3.2:3b).
 chmod +x scripts/setup.sh
 ./scripts/setup.sh
 ```
 
 That's it. The script:
 1. Starts Ollama + backend + frontend via Docker Compose
-2. Pulls the AI models (`llama3.2:1b` for LLM, `nomic-embed-text` for embeddings) — ~2 GB, one-time only
+2. Pulls the AI models (`llama3.2:3b` for LLM, `nomic-embed-text` for embeddings) — ~2 GB, one-time only
 3. Runs document ingestion to build the vector store
 4. Confirms all services are healthy
 

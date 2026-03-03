@@ -1,6 +1,8 @@
 # Dependencies
 node_modules/
 package-lock.json
+# Frontend lock file must be committed so Docker's `npm ci` can run
+!frontend/package-lock.json
 
 # Environment variables
 .env
