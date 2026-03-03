@@ -41,15 +41,22 @@ const VECTORSTORE_PATH = join(projectRoot, 'vectorstore')
 // LLM Configuration
 const USE_CLAUDE = process.env.USE_CLAUDE === 'true'
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6'
+const CLAUDE_MAX_TOKENS = parseInt(process.env.CLAUDE_MAX_TOKENS) || 500
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2:3b' // Upgraded from 1b
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2:3b'
 const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'
+const OLLAMA_TEMPERATURE = parseFloat(process.env.OLLAMA_TEMPERATURE ?? '0')
 
 // Limits
 const MAX_MESSAGE_LENGTH = 2000
-const MAX_CONTEXT_TOKENS = 6000 // Leave room for response
-const LLM_TIMEOUT_MS = 90000
-const SESSION_TTL_MS = 60 * 60 * 1000 // Reduced to 1 hour (security best practice)
+const MAX_CONTEXT_TOKENS = parseInt(process.env.MAX_CONTEXT_TOKENS) || 6000
+const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS) || 90000
+const SESSION_TTL_MS = parseInt(process.env.SESSION_TTL_MS) || 3600000
+
+// Retrieval
+const RETRIEVAL_K = parseInt(process.env.RETRIEVAL_K) || 30
+const RETRIEVAL_SCORE_THRESHOLD = parseFloat(process.env.RETRIEVAL_SCORE_THRESHOLD) || 0.75
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PROMPTS WITH FEW-SHOT EXAMPLES
@@ -169,20 +176,20 @@ function initializeLLMs() {
   // Primary LLM: Claude Sonnet
   if (USE_CLAUDE && ANTHROPIC_API_KEY) {
     primaryLLM = new ChatAnthropic({
-      model: 'claude-sonnet-4-6',
+      model: CLAUDE_MODEL,
       apiKey: ANTHROPIC_API_KEY,
-      maxTokens: 500,
+      maxTokens: CLAUDE_MAX_TOKENS,
       topP: 1, // LangChain defaults topP to -1; claude-sonnet-4-6 rejects that
       temperature: null // null → omit from request (claude-sonnet-4-6 rejects both together)
     })
-    console.log('✅ Primary LLM: Claude 3.5 Sonnet (Anthropic API)')
+    console.log(`✅ Primary LLM: ${CLAUDE_MODEL} (Anthropic API)`)
   }
 
   // Fallback LLM: Ollama
   fallbackLLM = new ChatOllama({
     model: OLLAMA_MODEL,
     baseUrl: OLLAMA_BASE_URL,
-    temperature: 0
+    temperature: OLLAMA_TEMPERATURE
   })
   console.log(`✅ Fallback LLM: ${OLLAMA_MODEL} (Ollama local)`)
 
@@ -416,7 +423,7 @@ async function handleRAGRetrieval(sessionId, message, streaming) {
   }
 
   // Retrieve similar documents (increased k for better recall)
-  const candidateDocs = await store.similaritySearchWithScore(message, 30)
+  const candidateDocs = await store.similaritySearchWithScore(message, RETRIEVAL_K)
 
   if (candidateDocs.length === 0) {
     throw new Error('NO_RELEVANT_DOCS')
@@ -429,8 +436,8 @@ async function handleRAGRetrieval(sessionId, message, streaming) {
     .join(', ')
   console.log(`[retrieval] Top 5 scores: ${topScores}`)
 
-  // Single moderate threshold (removed adaptive logic)
-  const threshold = 0.5
+  // Configurable threshold via RETRIEVAL_SCORE_THRESHOLD env var (default 0.75)
+  const threshold = RETRIEVAL_SCORE_THRESHOLD
   let filteredDocs = candidateDocs.filter(([, score]) => score <= threshold)
 
   if (filteredDocs.length === 0) {
@@ -454,7 +461,7 @@ async function handleRAGRetrieval(sessionId, message, streaming) {
   }
 
   console.log(
-    `[retrieval] Kept ${filteredDocs.length}/${candidateDocs.length} docs (threshold: ${threshold})`
+    `[retrieval] Kept ${filteredDocs.length}/${candidateDocs.length} docs (threshold: ${threshold}, k: ${RETRIEVAL_K})`
   )
 
   // Deduplicate by source

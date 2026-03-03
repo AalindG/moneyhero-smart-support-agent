@@ -30,7 +30,7 @@ export async function streamResponse(prompt, res) {
         stream: true,
         options: {
           temperature: OLLAMA.TEMPERATURE,
-          num_predict: 900
+          num_predict: parseInt(process.env.OLLAMA_MAX_TOKENS) || 900
         }
       })
     })

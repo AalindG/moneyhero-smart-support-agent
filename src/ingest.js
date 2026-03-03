@@ -80,9 +80,11 @@ async function ingestDocuments() {
 
     // Step 3: Improved text splitting for financial documents
     console.log('Splitting documents into chunks (improved strategy)...')
+    const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE) || 1500
+    const CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP) || 250
     const textSplitter = new RecursiveCharacterTextSplitter({
-      chunkSize: 1500, // Increased from 1000 to preserve tables
-      chunkOverlap: 250, // Increased overlap for better context
+      chunkSize: CHUNK_SIZE,
+      chunkOverlap: CHUNK_OVERLAP,
       // Prioritize section boundaries over table rows
       separators: ['\n## ', '\n### ', '\n#### ', '\n\n', '\n- ', '\n', ' ']
     })

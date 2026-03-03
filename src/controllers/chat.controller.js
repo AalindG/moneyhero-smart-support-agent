@@ -22,6 +22,8 @@ import {
 // LLM initialization
 const USE_CLAUDE = process.env.USE_CLAUDE === 'true'
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6'
+const CLAUDE_MAX_TOKENS = parseInt(process.env.CLAUDE_MAX_TOKENS) || 500
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2:3b'
 
@@ -46,14 +48,14 @@ function initializeLLMs() {
   // Primary LLM: Claude if configured, else Ollama
   if (USE_CLAUDE && ANTHROPIC_API_KEY) {
     primaryLLM = new ChatAnthropic({
-      model: 'claude-sonnet-4-6',
+      model: CLAUDE_MODEL,
       apiKey: ANTHROPIC_API_KEY,
-      maxTokens: 500,
+      maxTokens: CLAUDE_MAX_TOKENS,
       streaming: true,
       topP: 1, // LangChain defaults topP to -1; claude-sonnet-4-6 rejects that
       temperature: null // null → omit from request (claude-sonnet-4-6 rejects both together)
     })
-    primaryLLMName = 'Claude Sonnet 4.6'
+    primaryLLMName = `Claude (${CLAUDE_MODEL})`
     console.log(`✅ Chat Controller: ${primaryLLMName} (primary)`)
     console.log('✅ Using Claude as primary LLM with Ollama fallback')
   } else {

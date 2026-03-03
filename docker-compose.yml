@@ -17,9 +17,6 @@ services:
     environment:
       - PORT=3001
       - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_MODEL=llama3.2:1b
-      - OLLAMA_CLASSIFIER_MODEL=llama3.2:1b
-      - OLLAMA_EMBED_MODEL=nomic-embed-text
       - DB_PATH=/app/data/moneyhero.db
       - NODE_ENV=production
     depends_on:
