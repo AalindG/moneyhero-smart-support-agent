@@ -55,9 +55,9 @@ const SESSION_TTL_MS = 60 * 60 * 1000 // Reduced to 1 hour (security best practi
 // PROMPTS WITH FEW-SHOT EXAMPLES
 // ═══════════════════════════════════════════════════════════════════════════
 
-const RAG_SYSTEM_PROMPT = `You are MoneyHero's financial assistant for Singapore credit cards and personal loans.
+const FIRST_MESSAGE_INSTRUCTION = `Start your reply with exactly: "Hi! I'm MoneyHero's AI assistant, here to help you find the right credit cards and personal loans."\n\n`
 
-On your very first reply for the conversation, start with: "Hi! I'm MoneyHero's AI assistant, here to help you find the right credit cards and personal loans." Do not write it every time, only for the first message to disclose your AI identity.
+const RAG_SYSTEM_PROMPT = `You are MoneyHero's financial assistant for Singapore credit cards and personal loans.
 
 MoneyHero's complete product catalogue (NEVER mention any product not in this list):
 - Credit cards: HSBC Revolution, Citi Cashback Plus, DBS Live Fresh, OCBC 365, UOB KrisFlyer
@@ -513,14 +513,13 @@ async function handleRAGRetrieval(sessionId, message, streaming) {
     )
   }
 
-  // Add AI identity disclosure for first message
-  let systemWithDisclosure = systemContent
-  if (isFirstMessage(sessionId)) {
-    systemWithDisclosure = systemContent.replace(
-      'Answer (1-2 paragraphs, conversational tone):',
-      'Answer (1-2 paragraphs, conversational tone). REMEMBER: Start with AI identity disclosure.'
-    )
-  }
+  // Prepend greeting instruction only on the first message, then immediately clear the flag
+  // so subsequent messages in the same session never receive it.
+  const firstMsg = isFirstMessage(sessionId)
+  const systemWithDisclosure = firstMsg
+    ? FIRST_MESSAGE_INSTRUCTION + systemContent
+    : systemContent
+  if (firstMsg) markMessageProcessed(sessionId)
 
   // For streaming, return data for controller to handle
   if (streaming) {
@@ -529,8 +528,7 @@ async function handleRAGRetrieval(sessionId, message, streaming) {
       memory,
       sources,
       context: sanitizedContext,
-      sanitizedQuestion,
-      isFirstMessage: isFirstMessage(sessionId)
+      sanitizedQuestion
     }
   }
 
