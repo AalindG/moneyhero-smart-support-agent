@@ -32,6 +32,32 @@ export function create(sessionId, role, content) {
 }
 
 /**
+ * Returns the top N most-asked user questions across all sessions.
+ * Ties (same count) are broken by most-recently asked first.
+ * @param {number} [limit=10]
+ * @returns {Array<{question: string, count: number, last_asked_at: string}>}
+ */
+export function findTopQuestions(limit = 10) {
+  try {
+    const stmt = db.prepare(`
+      SELECT
+        content          AS question,
+        COUNT(*)         AS count,
+        MAX(timestamp)   AS last_asked_at
+      FROM messages
+      WHERE role = 'user'
+      GROUP BY content
+      ORDER BY count DESC, last_asked_at DESC
+      LIMIT ?
+    `)
+    return stmt.all(limit)
+  } catch (error) {
+    console.error('Error retrieving top questions:', error)
+    throw new Error('Failed to retrieve top questions')
+  }
+}
+
+/**
  * Retrieves complete conversation history for a session, ordered chronologically
  * @param {string} sessionId - Session identifier
  * @returns {Array<{role: string, content: string, timestamp: string}>} Array of message objects

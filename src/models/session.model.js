@@ -27,6 +27,31 @@ export function create() {
 }
 
 /**
+ * Lists all sessions with their message count and last activity time.
+ * Used by the admin portal.
+ * @returns {Array<{id: string, created_at: string, message_count: number, last_message_at: string|null}>}
+ */
+export function findAll() {
+  try {
+    const stmt = db.prepare(`
+      SELECT
+        s.id,
+        s.created_at,
+        COUNT(m.id)       AS message_count,
+        MAX(m.timestamp)  AS last_message_at
+      FROM sessions s
+      LEFT JOIN messages m ON m.session_id = s.id
+      GROUP BY s.id
+      ORDER BY s.created_at DESC
+    `)
+    return stmt.all()
+  } catch (error) {
+    console.error('Error listing sessions:', error)
+    throw new Error('Failed to list sessions')
+  }
+}
+
+/**
  * Retrieves a session by ID to verify existence
  * @param {string} sessionId - Session identifier
  * @returns {{id: string, created_at: string}|null} Session object or null if not found

@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { RotateCcw, X } from 'lucide-react'
+import { RotateCcw, X, ShieldCheck } from 'lucide-react'
 import { useSession } from './hooks/useSession'
 import { useHistory } from './hooks/useHistory'
 import { useChat } from './hooks/useChat'
 import { escalate } from './services/api'
 import { ChatWindow } from './components/Chat/ChatWindow'
 import { InputBar } from './components/Chat/InputBar'
+import AdminPortal from './components/Admin/AdminPortal'
 
 export default function App() {
   const { sessionId, loading: sessionLoading, newSession } = useSession()
@@ -14,6 +15,9 @@ export default function App() {
 
   // 'idle' | 'confirm' | 'loading' | { ticketId } | { error }
   const [escalateState, setEscalateState] = useState('idle')
+
+  // 'chat' | 'admin'
+  const [page, setPage] = useState('chat')
 
   const handleEscalate = async () => {
     if (escalateState === 'confirm') {
@@ -45,6 +49,10 @@ export default function App() {
     )
   }
 
+  if (page === 'admin') {
+    return <AdminPortal onBack={() => setPage('chat')} />
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-0 sm:p-6">
       {/* Chat card — full screen on mobile, centered card on sm+ */}
@@ -62,14 +70,25 @@ export default function App() {
             </div>
           </div>
 
-          <button
-            onClick={handleNewChat}
-            className="flex items-center gap-1 text-xs text-slate-400 hover:text-white transition-colors px-2 py-1 rounded-md hover:bg-white/10"
-            title="Start a new conversation"
-          >
-            <RotateCcw className="w-3 h-3" />
-            <span>New chat</span>
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage('admin')}
+              className="flex items-center gap-1 text-xs text-slate-400 hover:text-white transition-colors px-2 py-1 rounded-md hover:bg-white/10"
+              title="Admin portal"
+            >
+              <ShieldCheck className="w-3 h-3" />
+              <span>Admin</span>
+            </button>
+
+            <button
+              onClick={handleNewChat}
+              className="flex items-center gap-1 text-xs text-slate-400 hover:text-white transition-colors px-2 py-1 rounded-md hover:bg-white/10"
+              title="Start a new conversation"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>New chat</span>
+            </button>
+          </div>
         </header>
 
         {/* Escalation banners */}

@@ -1,5 +1,46 @@
 const BASE = '/api'
 
+// ─── Admin API ────────────────────────────────────────────────────────────────
+
+export async function adminLogin(username, password) {
+  const res = await fetch(`${BASE}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || 'Invalid credentials')
+  }
+  return res.json()
+}
+
+export async function adminListSessions(token) {
+  const res = await fetch(`${BASE}/admin/sessions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error(String(res.status))
+  return res.json()
+}
+
+export async function adminGetMessages(sessionId, token) {
+  const res = await fetch(`${BASE}/admin/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error(String(res.status))
+  return res.json()
+}
+
+export async function adminGetTopQuestions(token, limit = 10) {
+  const res = await fetch(`${BASE}/admin/top-questions?limit=${limit}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error(String(res.status))
+  return res.json()
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 export async function createSession() {
   const res = await fetch(`${BASE}/session`, { method: 'POST' })
   if (!res.ok) throw new Error('Failed to create session')
