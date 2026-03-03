@@ -1,6 +1,6 @@
 # MoneyHero Smart Support Agent
 
-RAG-powered customer support chatbot for credit cards and personal loans. Built with LangChain.js, Ollama (local LLMs), React, and Express.
+RAG-powered customer support chatbot for credit cards and personal loans. Built with LangChain.js, Claude Sonnet 4.6 (primary LLM), Ollama (fallback + embeddings), React, and Express.
 
 **Chat interface → http://localhost:3000**
 **Backend API → http://localhost:3001**
@@ -40,9 +40,9 @@ Open **http://localhost:3000** to use the chat interface.
 | ------------ | ------------------------------------------------- |
 | Chat UI      | React 18 + Tailwind CSS + Vite (served via nginx) |
 | API server   | Node.js (ESM) + Express                           |
-| AI / RAG     | LangChain.js + Ollama (`llama3.2:1b`)             |
-| Classifier   | `llama3.2:1b` (separate intent classifier)        |
-| Embeddings   | `nomic-embed-text` via Ollama                     |
+| Primary LLM  | Claude Sonnet 4.6 (Anthropic API)                 |
+| Fallback LLM | Ollama `llama3.2:3b` (local Docker)               |
+| Embeddings   | `nomic-embed-text` via Ollama (always local)      |
 | Vector store | HNSWLib (local, file-based)                       |
 | Database     | SQLite via `better-sqlite3`                       |
 | Streaming    | Server-Sent Events (SSE)                          |
@@ -60,12 +60,15 @@ User message
     ├─ Escalation keywords?  →  connect to human agent
     ├─ Financial keywords?   →  skip classifier, go to RAG
     ├─ Off-topic keywords?   →  polite redirect
+    ├─ Catalog listing?      →  pre-built product list (no LLM)
     │
-    └─ LLM intent classifier (llama3.2:1b, ~3s)
+    └─ LLM intent classifier
            │
-           ├─ answer   →  RAG retrieval pipeline
-           ├─ escalate →  handoff message
-           └─ off_topic → redirect
+           ├─ answer    →  RAG retrieval pipeline
+           │                  └─ Claude Sonnet 4.6 (primary)
+           │                       └─ Ollama llama3.2:3b (fallback)
+           ├─ escalate  →  handoff message
+           └─ off_topic →  redirect
 ```
 
 The RAG pipeline has 5 layers before generating a response:
@@ -126,14 +129,15 @@ Returns a daily ticket ID: `TKT-YYYYMMDD-NNN`
 
 ## Environment Variables
 
-| Variable                  | Default                  | Notes                           |
-| ------------------------- | ------------------------ | ------------------------------- |
-| `PORT`                    | `3001`                   |                                 |
-| `OLLAMA_BASE_URL`         | `http://localhost:11434` | `http://ollama:11434` in Docker |
-| `OLLAMA_MODEL`            | `llama3.2:1b`            | Generation model                |
-| `OLLAMA_CLASSIFIER_MODEL` | `llama3.2:1b`            | Intent classifier               |
-| `OLLAMA_EMBED_MODEL`      | `nomic-embed-text`       | Embedding model                 |
-| `DB_PATH`                 | `./data/moneyhero.db`    |                                 |
+| Variable            | Default                  | Notes                                        |
+| ------------------- | ------------------------ | -------------------------------------------- |
+| `PORT`              | `3001`                   |                                              |
+| `USE_CLAUDE`        | `false`                  | `true` → Claude primary + Ollama fallback    |
+| `ANTHROPIC_API_KEY` | —                        | Required when `USE_CLAUDE=true`              |
+| `OLLAMA_BASE_URL`   | `http://localhost:11434` | `http://ollama:11434` in Docker              |
+| `OLLAMA_MODEL`      | `llama3.2:3b`            | LLM fallback (or primary if USE_CLAUDE=false)|
+| `OLLAMA_EMBED_MODEL`| `nomic-embed-text`       | Embeddings — always Ollama                   |
+| `DB_PATH`           | `./data/moneyhero.db`    |                                              |
 
 Copy `.env.example` to `.env` for local development.
 
@@ -145,7 +149,7 @@ Requires [Ollama](https://ollama.com) installed and running locally.
 
 ```bash
 # Terminal 1 — Ollama
-ollama pull llama3.2:1b
+ollama pull llama3.2:3b
 ollama pull nomic-embed-text
 ollama serve
 
@@ -202,3 +206,16 @@ npm run format        # Prettier
 ---
 
 See [REFLECTION.md](REFLECTION.md) for notes on how this was built with AI assistance.
+
+---
+
+## Documentation
+
+Detailed reference docs are in [`documentation/`](documentation/):
+
+| File | Contents |
+|---|---|
+| [ARCHITECTURE.md](documentation/ARCHITECTURE.md) | Folder structure, request flow, DB schema, guardrails |
+| [API_CONTRACT.md](documentation/API_CONTRACT.md) | Full endpoint spec, SSE format, error codes |
+| [DOCKER_SETUP.md](documentation/DOCKER_SETUP.md) | Docker services, env vars, troubleshooting |
+| [TEST_DOCUMENTATION.md](documentation/TEST_DOCUMENTATION.md) | Test suite overview, running tests, CI/CD |

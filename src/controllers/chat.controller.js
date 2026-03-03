@@ -2,15 +2,66 @@ import * as SessionModel from '../models/session.model.js'
 import * as MessageModel from '../models/message.model.js'
 import * as AnalyticsModel from '../models/analytics.model.js'
 import { chat } from '../agent.js'
-import { streamResponse } from '../services/ollama.service.js'
+import { ChatOllama } from '@langchain/ollama'
+import { ChatAnthropic } from '@langchain/anthropic'
+import { HumanMessage, SystemMessage } from '@langchain/core/messages'
 import { setupSSE } from '../middleware/sse.js'
 import { validateRequestParams } from '../middleware/validation.js'
-import { addFinancialDisclaimer, addRegulatoryWarnings, applyBoldFormatting } from '../utils/compliance.js'
+import { validateStreamingToken, validateOutput } from '../middleware/outputValidation.js'
+import {
+  addFinancialDisclaimer,
+  addRegulatoryWarnings,
+  applyBoldFormatting
+} from '../utils/compliance.js'
 
 /**
  * Chat Controller
- * Handles chat message processing and streaming with compliance
+ * Handles chat message processing and streaming with Claude + Ollama fallback
  */
+
+// LLM initialization
+const USE_CLAUDE = process.env.USE_CLAUDE === 'true'
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2:3b'
+
+let primaryLLM = null
+let fallbackLLM = null
+let primaryLLMName = null
+let fallbackLLMName = null
+
+function initializeLLMs() {
+  if (primaryLLM && fallbackLLM) return
+  console.log('Initializing LLMs...', { USE_CLAUDE, ANTHROPIC_API_KEY: !!ANTHROPIC_API_KEY })
+
+  // Fallback LLM: Ollama (always initialized)
+  fallbackLLM = new ChatOllama({
+    model: OLLAMA_MODEL,
+    baseUrl: OLLAMA_BASE_URL,
+    temperature: 0
+  })
+  fallbackLLMName = `Ollama (${OLLAMA_MODEL})`
+  console.log(`✅ Chat Controller: ${fallbackLLMName} (fallback)`)
+
+  // Primary LLM: Claude if configured, else Ollama
+  if (USE_CLAUDE && ANTHROPIC_API_KEY) {
+    primaryLLM = new ChatAnthropic({
+      model: 'claude-sonnet-4-6',
+      apiKey: ANTHROPIC_API_KEY,
+      maxTokens: 500,
+      streaming: true,
+      topP: 1, // LangChain defaults topP to -1; claude-sonnet-4-6 rejects that
+      temperature: null // null → omit from request (claude-sonnet-4-6 rejects both together)
+    })
+    primaryLLMName = 'Claude Sonnet 4.6'
+    console.log(`✅ Chat Controller: ${primaryLLMName} (primary)`)
+    console.log('✅ Using Claude as primary LLM with Ollama fallback')
+  } else {
+    primaryLLM = fallbackLLM
+    primaryLLMName = fallbackLLMName
+    console.log(`⚠️  Claude not configured. Using ${primaryLLMName} as primary.`)
+  }
+}
 
 /**
  * Send pre-computed text as a word-by-word SSE stream.
@@ -48,7 +99,9 @@ export async function handleChatMessage(req, res) {
 
     console.log(`── CHAT REQUEST ──────────────────────────────────────`)
     console.log(`  session : ${sessionId}`)
-    console.log(`  message : "${(message || '').slice(0, 80)}${(message || '').length > 80 ? '…' : ''}"`)
+    console.log(
+      `  message : "${(message || '').slice(0, 80)}${(message || '').length > 80 ? '…' : ''}"`
+    )
     console.log(`  length  : ${(message || '').length} chars`)
 
     // Validate inputs
@@ -86,7 +139,9 @@ export async function handleChatMessage(req, res) {
       console.log(`  [step 1/3] calling chat agent...`)
       const agentStart = Date.now()
       const result = await chat(sessionId, message, true)
-      console.log(`  [step 1/3] chat agent done — intent="${result.intent}" confidence=${result.confidence?.toFixed(2) ?? 'n/a'} (${Date.now() - agentStart}ms)`)
+      console.log(
+        `  [step 1/3] chat agent done — intent="${result.intent}" confidence=${result.confidence?.toFixed(2) ?? 'n/a'} (${Date.now() - agentStart}ms)`
+      )
 
       // Calculate response time
       const responseTimeMs = Date.now() - startTime
@@ -138,33 +193,131 @@ export async function handleChatMessage(req, res) {
         return
       }
 
-      // Handle answer intent — either direct (catalog) or streamed via Ollama
-      const { prompt, directReply, memory } = result
+      // Handle answer intent — stream from LLM
+      const { systemPrompt, sanitizedQuestion, memory } = result
 
-      let fullResponse
-      if (directReply) {
-        // Catalog queries: stream retrieved doc content directly without LLM generation
-        console.log(`  [step 2/3] direct response (catalog) — streaming ${directReply.length} chars`)
-        await fakeStream(res, directReply)
-        fullResponse = directReply
-      } else {
-        console.log(`  [step 2/3] streaming from Ollama... (prompt: ${prompt.length} chars)`)
-        const streamStart = Date.now()
-        fullResponse = await streamResponse(prompt, res)
-        console.log(`  [step 2/3] Ollama done — ${fullResponse.length} chars in ${Date.now() - streamStart}ms`)
+      if (!systemPrompt || !sanitizedQuestion) {
+        throw new Error('Invalid agent response: missing systemPrompt or sanitizedQuestion')
+      }
+
+      // Initialize LLMs
+      initializeLLMs()
+
+      console.log(`  [step 2/3] streaming from LLM... (prompt: ${systemPrompt.length} chars)`)
+      const streamStart = Date.now()
+
+      let fullResponse = ''
+      let usedFallback = false
+
+      try {
+        // Try primary LLM
+        console.log(`  [llm] → ${primaryLLMName}`)
+        const stream = await primaryLLM.stream([
+          new SystemMessage(systemPrompt),
+          new HumanMessage(sanitizedQuestion)
+        ])
+
+        for await (const chunk of stream) {
+          const token = chunk.content
+          if (token) {
+            // Validate token before streaming
+            const validation = validateStreamingToken(token)
+            if (!validation.valid) {
+              console.error(`  [llm] blocked invalid token`)
+              continue
+            }
+
+            fullResponse += token
+            try {
+              res.write(`data: ${JSON.stringify({ token })}\n\n`)
+              if (res.flush) res.flush()
+            } catch {
+              // Client disconnected
+              break
+            }
+          }
+        }
+        console.log(`  [llm] ✅ ${primaryLLMName} succeeded`)
+      } catch (primaryError) {
+        console.warn(`  [llm] ⚠️  ${primaryLLMName} failed: ${primaryError.message}`)
+
+        if (primaryLLM !== fallbackLLM) {
+          // Try fallback LLM
+          console.log(`  [llm] → ${fallbackLLMName} (fallback)`)
+          usedFallback = true
+          fullResponse = '' // Reset
+
+          try {
+            const stream = await fallbackLLM.stream([
+              new SystemMessage(systemPrompt),
+              new HumanMessage(sanitizedQuestion)
+            ])
+
+            for await (const chunk of stream) {
+              const token = chunk.content
+              if (token) {
+                const validation = validateStreamingToken(token)
+                if (!validation.valid) {
+                  console.error(`  [llm] blocked invalid token`)
+                  continue
+                }
+
+                fullResponse += token
+                try {
+                  res.write(`data: ${JSON.stringify({ token })}\n\n`)
+                  if (res.flush) res.flush()
+                } catch {
+                  break
+                }
+              }
+            }
+            console.log(`  [llm] ✅ ${fallbackLLMName} succeeded`)
+          } catch (fallbackError) {
+            console.error(`  [llm] ❌ both LLMs failed (${primaryLLMName} + ${fallbackLLMName})`)
+            throw new Error('Both primary and fallback LLMs failed')
+          }
+        } else {
+          throw primaryError
+        }
+      }
+
+      const activeLLM = usedFallback ? fallbackLLMName : primaryLLMName
+      console.log(
+        `  [step 2/3] LLM done — ${activeLLM} — ${fullResponse.length} chars in ${Date.now() - streamStart}ms`
+      )
+
+      // Validate complete response
+      const validation = validateOutput(fullResponse)
+      if (!validation.valid) {
+        console.error(`  [validation] ❌ failed: ${validation.error}`)
+        fullResponse = validation.sanitized
+        try {
+          res.write(
+            `data: ${JSON.stringify({ error: 'response_filtered', message: validation.sanitized })}\n\n`
+          )
+          if (res.flush) res.flush()
+        } catch {
+          /* client disconnected */
+        }
       }
 
       // Apply deterministic bold formatting + disclaimer + regulatory warnings.
       // Send a single `bold` SSE event so the client replaces the streamed plain text
       // with the final formatted version (bold markers + disclaimer appended).
       const boldedResponse = applyBoldFormatting(fullResponse)
-      const withDisclaimer = addFinancialDisclaimer(boldedResponse, result.intent, boldedResponse.length)
+      const withDisclaimer = addFinancialDisclaimer(
+        boldedResponse,
+        result.intent,
+        boldedResponse.length
+      )
       const disclaimedResponse = addRegulatoryWarnings(withDisclaimer)
 
       try {
         res.write(`data: ${JSON.stringify({ bold: disclaimedResponse })}\n\n`)
         if (res.flush) res.flush()
-      } catch { /* client disconnected */ }
+      } catch {
+        /* client disconnected */
+      }
 
       // Persist conversation to database (with compliance content)
       console.log(`  [step 3/3] saving messages to DB...`)

@@ -22,7 +22,19 @@ const FORBIDDEN_PHRASES = [
   /Layer \d+:/i,
   /RAG_SYSTEM_PROMPT/i,
   /sanitize\(/i,
-  /<\/?(?:user|assistant|system)>/i
+  /<\/?(?:user|assistant|system|context|examples|guidelines)>/i,  // Prompt structure tags
+  /---\s*(START|END)\s*(DOCUMENTS|QUESTION|ANSWER)/i,  // Old prompt delimiters
+  /^EXAMPLES:/mi,  // Examples section header
+  /^RULES:/mi,     // Rules section header
+  /Answer \(1-2 paragraphs/i,  // Output format instruction
+  /<guidelines>/i,  // Guidelines section start
+  /<\/guidelines>/i,  // Guidelines section end
+  /→/,  // Arrow character used in examples section (unique to prompt)
+  /For travel rewards questions:/i,  // Example prefix from prompt
+  /For approval guarantee questions:/i,  // Example prefix from prompt
+  /For off-topic questions:/i,  // Example prefix from prompt
+  /UOB KrisFlyer Card.*provides 1\.4 miles/i,  // Specific example content
+  /Would you like me to connect you with an advisor\?.*For off-topic/i  // Multiple examples in sequence
 ]
 
 // Prohibited financial advice patterns

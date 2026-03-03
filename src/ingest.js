@@ -78,13 +78,13 @@ async function ingestDocuments() {
     })
     console.log('')
 
-    // Step 3: Split documents into markdown-aware chunks
-    console.log('Splitting documents into chunks...')
+    // Step 3: Improved text splitting for financial documents
+    console.log('Splitting documents into chunks (improved strategy)...')
     const textSplitter = new RecursiveCharacterTextSplitter({
-      chunkSize: 1000,
-      chunkOverlap: 200,
-      // Prefer splitting at headings and table boundaries to keep sections coherent
-      separators: ['\n## ', '\n### ', '\n|', '\n\n', '\n', ' ']
+      chunkSize: 1500, // Increased from 1000 to preserve tables
+      chunkOverlap: 250, // Increased overlap for better context
+      // Prioritize section boundaries over table rows
+      separators: ['\n## ', '\n### ', '\n#### ', '\n\n', '\n- ', '\n', ' ']
     })
 
     const splitDocs = await textSplitter.splitDocuments(docs)

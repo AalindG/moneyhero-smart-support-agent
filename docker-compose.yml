@@ -12,6 +12,8 @@ services:
       - ./vectorstore:/app/vectorstore
       - ./data:/app/data
       - ./docs:/app/docs
+    env_file:
+      - .env
     environment:
       - PORT=3001
       - OLLAMA_BASE_URL=http://ollama:11434
