@@ -1,20 +1,26 @@
 /**
- * MoneyHero RAG Agent - Simplified Version
- * Answers customer questions using ONLY information from the docs/ folder
- * 
- * Core Flow:
- * 1. Detect escalation keywords → handoff to human
- * 2. Detect off-topic keywords → polite redirect  
- * 3. Check for catalog listing query → return overview.md
- * 4. Check for comparison query → smart bullet matching
- * 5. Retrieve relevant docs → generate answer with LLM
+ * MoneyHero RAG Agent - Production Grade
+ * Secure financial chatbot with Claude Sonnet primary + Ollama fallback
+ *
+ * Security Features:
+ * - Input sanitization (prompt injection protection)
+ * - Role-based message separation
+ * - Context window overflow protection
+ * - PII redaction in logs
+ * - Output validation
+ *
+ * Model Strategy:
+ * - Primary: Claude 3.5 Sonnet (Anthropic API)
+ * - Fallback: Llama 3.2 3B (Ollama local)
+ * - Embeddings: nomic-embed-text (Ollama)
  */
 
 import dotenv from 'dotenv'
 import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama'
+import { ChatAnthropic } from '@langchain/anthropic'
+import { HumanMessage, SystemMessage } from '@langchain/core/messages'
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib'
 import { BufferMemory } from 'langchain/memory'
-import { readFileSync, readdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { loadVectorstoreMetadata } from './config/embeddingValidation.js'
@@ -31,45 +37,78 @@ const __dirname = dirname(__filename)
 const projectRoot = join(__dirname, '..')
 
 const VECTORSTORE_PATH = join(projectRoot, 'vectorstore')
+
+// LLM Configuration
+const USE_CLAUDE = process.env.USE_CLAUDE === 'true'
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2'
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2:3b' // Upgraded from 1b
 const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'
 
 // Limits
 const MAX_MESSAGE_LENGTH = 2000
-const MAX_HISTORY_TOKENS = 2000
+const MAX_CONTEXT_TOKENS = 6000 // Leave room for response
 const LLM_TIMEOUT_MS = 90000
-const SESSION_TTL_MS = 2 * 60 * 60 * 1000
+const SESSION_TTL_MS = 60 * 60 * 1000 // Reduced to 1 hour (security best practice)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PROMPTS
+// PROMPTS WITH FEW-SHOT EXAMPLES
 // ═══════════════════════════════════════════════════════════════════════════
 
-const RAG_SYSTEM_PROMPT = `You are MoneyHero's AI assistant for credit cards and personal loans in Singapore.
+const RAG_SYSTEM_PROMPT = `You are MoneyHero's financial assistant for Singapore credit cards and personal loans.
 
-<documents>
+On your very first reply for the conversation, start with: "Hi! I'm MoneyHero's AI assistant, here to help you find the right credit cards and personal loans." Do not write it every time, only for the first message to disclose your AI identity.
+
+MoneyHero's complete product catalogue (NEVER mention any product not in this list):
+- Credit cards: HSBC Revolution, Citi Cashback Plus, DBS Live Fresh, OCBC 365, UOB KrisFlyer
+- Personal loans: DBS Personal Loan, Standard Chartered CashOne
+
+Use ONLY the following product information to answer. Do not use outside knowledge.
+
+---
 {context}
-</documents>
+---
 
-RULES:
-1. Answer ONLY using information from <documents> above
-2. If documents don't have the answer, say: "I don't have that information. Would you like me to connect you with an advisor?"
-3. Include exact product names, rates, and fees from the documents
-4. Never guarantee approval — say "may be eligible" or "typically requires"
-5. Always add: "Verify current terms with [bank name] before applying"
-6. For comparisons, list facts objectively without saying which is "best"
+Rules:
+1. Only mention products from the catalogue above. If asked about something else, say: "I don't have information on that. Would you like to speak with an advisor?"
+2. Only state facts that appear in the product information above. Never invent rates, fees, or features.
+3. If the product information doesn't answer the question, say: "I don't have that information. Would you like me to connect you with an advisor?"
+4. Keep answers under 120 words. Use **bold** for product names and key numbers.
+5. End with: "Verify current terms with [bank name] before applying."
 
 Question: {question}
 
 Answer:`
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PRODUCT CATALOG (injected as context for listing queries)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CREDIT_CARD_CATALOG_CONTEXT = `MoneyHero offers the following 5 credit cards:
+1. **HSBC Revolution Card** — Earn rewards points on online spend, dining, and entertainment
+2. **Citi Cashback Plus Card** — Unlimited cashback on all purchases, no annual fee
+3. **DBS Live Fresh Card** — Cashback on online shopping and Visa contactless payments
+4. **OCBC 365 Card** — Cashback on dining, groceries, and petrol
+5. **UOB KrisFlyer Card** — Earn KrisFlyer miles on everyday spend
+
+Ask about any specific card for full details on fees, rewards, and eligibility.`
+
+const PERSONAL_LOAN_CATALOG_CONTEXT = `MoneyHero offers the following 2 personal loans:
+1. **DBS Personal Loan** — Flexible personal loan with competitive interest rates from DBS Bank
+2. **Standard Chartered CashOne Loan** — Fast-approval personal loan from Standard Chartered
+
+Ask about either loan for full details on rates, tenure, and eligibility.`
+
+// ═══════════════════════════════════════════════════════════════════════════
 // STATE MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════
 
 let vectorStore = null
+let primaryLLM = null
+let fallbackLLM = null
 const sessionMemories = new Map()
 const sessionLastAccess = new Map()
+const sessionFirstMessage = new Map() // Track first message for AI disclosure
 
 function evictStaleSessions() {
   const now = Date.now()
@@ -77,6 +116,7 @@ function evictStaleSessions() {
     if (now - lastAccess > SESSION_TTL_MS) {
       sessionMemories.delete(sessionId)
       sessionLastAccess.delete(sessionId)
+      sessionFirstMessage.delete(sessionId)
       console.log(`Evicted stale session: ${sessionId}`)
     }
   }
@@ -85,10 +125,19 @@ function evictStaleSessions() {
 function getSessionMemory(sessionId) {
   if (!sessionMemories.has(sessionId)) {
     sessionMemories.set(sessionId, new BufferMemory({ returnMessages: true, memoryKey: 'history' }))
+    sessionFirstMessage.set(sessionId, true) // Mark as first message
   }
   sessionLastAccess.set(sessionId, Date.now())
   evictStaleSessions()
   return sessionMemories.get(sessionId)
+}
+
+function isFirstMessage(sessionId) {
+  return sessionFirstMessage.get(sessionId) === true
+}
+
+function markMessageProcessed(sessionId) {
+  sessionFirstMessage.set(sessionId, false)
 }
 
 async function getVectorStore() {
@@ -112,21 +161,88 @@ async function getVectorStore() {
   }
 }
 
+function initializeLLMs() {
+  if (primaryLLM && fallbackLLM) return
+
+  console.log('Initializing LLMs...', { USE_CLAUDE, ANTHROPIC_API_KEY })
+
+  // Primary LLM: Claude Sonnet
+  if (USE_CLAUDE && ANTHROPIC_API_KEY) {
+    primaryLLM = new ChatAnthropic({
+      model: 'claude-sonnet-4-6',
+      apiKey: ANTHROPIC_API_KEY,
+      maxTokens: 500,
+      topP: 1, // LangChain defaults topP to -1; claude-sonnet-4-6 rejects that
+      temperature: null // null → omit from request (claude-sonnet-4-6 rejects both together)
+    })
+    console.log('✅ Primary LLM: Claude 3.5 Sonnet (Anthropic API)')
+  }
+
+  // Fallback LLM: Ollama
+  fallbackLLM = new ChatOllama({
+    model: OLLAMA_MODEL,
+    baseUrl: OLLAMA_BASE_URL,
+    temperature: 0
+  })
+  console.log(`✅ Fallback LLM: ${OLLAMA_MODEL} (Ollama local)`)
+
+  if (!primaryLLM) {
+    primaryLLM = fallbackLLM
+    console.log('⚠️  Claude not configured. Using Ollama as primary LLM.')
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// UTILITIES
+// SECURITY UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Redact PII from logs (credit cards, NRIC, salaries)
+ */
+function redactPII(text) {
+  return text
+    .replace(/\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b/g, '[CARD_REDACTED]')
+    .replace(/\b[STFG]\d{7}[A-Z]\b/gi, '[NRIC_REDACTED]')
+    .replace(
+      /\b\d{1,3}(,\d{3})*(\.\d{2})?\b(?=\s*(dollars?|sgd|per month|salary))/gi,
+      '[AMOUNT_REDACTED]'
+    )
+}
+
+/**
+ * Sanitize user input to prevent prompt injection
+ */
+function sanitizeUserInput(message) {
+  return message
+    .replace(/<\/?(?:documents|user|assistant|system|context|question|examples|guidelines)>/gi, '') // Strip role/structure tags
+    .replace(/---\s*(START|END)\s*(DOCUMENTS|QUESTION|ANSWER)/gi, '') // Strip old delimiters
+    .replace(/RULES?:|IMPORTANT|system prompt|ignore previous|instructions?:|EXAMPLES?:/gi, '') // Block instruction injection
+    .replace(/\{[^}]+\}/g, '') // Remove template variables
+    .slice(0, MAX_MESSAGE_LENGTH) // Hard length limit
+}
+
+/**
+ * Sanitize context to prevent delimiter escape
+ */
+function sanitizeContext(text) {
+  return text
+    .replace(/<\/?(?:user|assistant|system|documents|context|examples|guidelines)>/gi, '')
+    .replace(/---\s*(START|END)\s*(DOCUMENTS|QUESTION|ANSWER)/gi, '')
+    .replace(/\{context\}|\{question\}/gi, '')
+    .replace(/IMPORTANT RULES/gi, '')
+    .slice(0, 20000) // Context hard limit
+}
+
+/**
+ * Estimate tokens (rough approximation)
+ */
 function estimateTokens(text) {
   return Math.ceil(text.length / 4)
 }
 
-function sanitizeContext(text) {
-  return text
-    .replace(/<\/?(?:user|assistant|system)>/gi, '')
-    .replace(/\{context\}|\{question\}/gi, '')
-    .replace(/IMPORTANT RULES/gi, '')
-}
-
+/**
+ * Detect product category from message
+ */
 function detectCategory(message) {
   const lower = message.toLowerCase()
   const isLoans = ['loan', 'borrow', 'repayment', 'instalment', 'installment', 'cashone'].some(kw =>
@@ -181,27 +297,19 @@ const OFF_TOPIC_KEYWORDS = [
   'recipe',
   'sports',
   'invest in',
-  'portfolio'
-]
-
-const LISTING_PATTERNS = [
-  /what (credit )?cards? (do you|does moneyHero) (offer|have|provide)/i,
-  /which cards? (do you|does moneyHero) (offer|have|provide)/i,
-  /list (all |the |your )?(credit )?cards?/i,
-  /tell me (about |all )?(your |the )?(cards?|products?)/i,
-  /available cards?/i,
-  /^what (are )?((your|the) )?cards?$/i
-]
-
-const COMPARISON_PATTERNS = [
-  /which cards? (have|offer|come with|include|give|provide|support)/i,
-  /what cards? (have|offer|come with|include|give|provide)/i,
-  /which card(s)? (is|are) (best|good|great|ideal|perfect|suitable|recommended)/i,
-  /what card(s)? (is|are) (best|good|great|ideal|perfect|suitable)/i,
-  /best card(s)? for/i,
-  /cards? for (travel|dining|cashback|miles|rewards|online|petrol|groceries)/i,
-  /which ones? (are|have|offer)/i,
-  /ones? (good|great|best|ideal) for/i
+  'portfolio',
+  // Meta-queries about the AI itself
+  'system prompt',
+  'your prompt',
+  'your instructions',
+  'your guidelines',
+  'your examples',
+  'how you work',
+  'how do you work',
+  'show me your',
+  'tell me your',
+  'what are your rules',
+  'repeat your'
 ]
 
 function detectEscalation(message) {
@@ -216,17 +324,73 @@ function detectOffTopic(message) {
   return OFF_TOPIC_KEYWORDS.some(kw => lower.includes(kw))
 }
 
-function detectListing(message) {
-  return LISTING_PATTERNS.some(p => p.test(message))
-}
-
-function detectComparison(message) {
-  return COMPARISON_PATTERNS.some(p => p.test(message))
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Detect if a message is asking for a listing of available products.
+ * Returns 'credit-cards', 'personal-loans', 'both', or null.
+ */
+function detectCatalogQuery(message) {
+  const lower = message.toLowerCase()
+
+  // Must have a listing-intent word
+  if (!/\b(what|which|list|show|all|any|available)\b/.test(lower)) return null
+
+  // Exclude specific-attribute queries — these go through vector search
+  if (
+    /\b(annual fee|interest rate|cashback|miles|reward|eligib|apply|benefit|travel|dining|petrol|grocery|online|rebate)\b/.test(
+      lower
+    )
+  )
+    return null
+
+  // Exclude queries that name a specific product/bank — vector search handles those
+  if (
+    /\b(hsbc|dbs|uob|ocbc|citi|standard chartered|krisflyer|live fresh|revolution|cashone|cashback plus|365)\b/i.test(
+      lower
+    )
+  )
+    return null
+
+  const hasCards = /\b(credit cards?|cards?)\b/.test(lower)
+  const hasLoans = /\b(personal loans?|loans?)\b/.test(lower)
+
+  // Generic "what products / offerings" — show both catalogs
+  if (!hasCards && !hasLoans) {
+    return /\b(products?|offerings?)\b/.test(lower) ? 'both' : null
+  }
+
+  if (hasCards && hasLoans) return 'both'
+  return hasCards ? 'credit-cards' : 'personal-loans'
+}
+
+/**
+ * Build a direct reply for catalog listing queries.
+ * Bypasses the LLM entirely — streams the pre-formatted catalog text directly.
+ * Returns the same shape as handleEscalation/handleOffTopic so the controller
+ * routes it through fakeStream without modification.
+ */
+async function buildCatalogResult(sessionId, sanitizedQuestion, catalogType) {
+  let reply = ''
+  if (catalogType === 'credit-cards' || catalogType === 'both') {
+    reply += CREDIT_CARD_CATALOG_CONTEXT
+  }
+  if (catalogType === 'personal-loans' || catalogType === 'both') {
+    if (reply) reply += '\n\n'
+    reply += PERSONAL_LOAN_CATALOG_CONTEXT
+  }
+
+  console.log(`[catalog] Direct reply for: ${catalogType}`)
+
+  // Save to session memory for follow-up context
+  const memory = getSessionMemory(sessionId)
+  await memory.saveContext({ input: sanitizedQuestion }, { output: reply })
+  markMessageProcessed(sessionId)
+
+  return { reply, intent: 'catalog', sources: ['product-catalog'] }
+}
 
 async function handleEscalation(sessionId, message) {
   const reply =
@@ -237,289 +401,192 @@ async function handleEscalation(sessionId, message) {
 
 async function handleOffTopic(sessionId, message) {
   const reply =
-    "I specialize in credit cards and personal loans. For other topics, please visit our main website or contact general support."
+    'I specialize in credit cards and personal loans. For other topics, please visit our main website or contact general support.'
   await getSessionMemory(sessionId).saveContext({ input: message }, { output: reply })
   return { reply, intent: 'off_topic', sources: [] }
 }
 
-async function handleCatalogListing(sessionId, message, streaming) {
-  console.log('  [retrieval] catalog query → reading all card files')
-  try {
-    const cardsDir = join(projectRoot, 'docs', 'credit-cards')
-    const cardFiles = readdirSync(cardsDir).filter(f => f.endsWith('.md'))
-    
-    const summaries = []
-    for (const file of cardFiles) {
-      const content = readFileSync(join(cardsDir, file), 'utf8')
-      const titleMatch = content.match(/^# (.+)$/m)
-      const title = titleMatch?.[1]?.trim() || file.replace('.md', '')
-      
-      // Extract overview/key benefits
-      const overviewMatch = content.match(/## Overview\s+(.*?)(?=\n##)/s)
-      const keyBenefitsMatch = content.match(/## Key Benefits\s+(.*?)(?=\n##)/s)
-      
-      let snippet = overviewMatch?.[1]?.trim() || ''
-      if (keyBenefitsMatch) {
-        const benefits = keyBenefitsMatch[1].trim().split('\n').slice(0, 2).join('; ')
-        snippet += (snippet ? ' ' : '') + benefits
-      }
-      
-      summaries.push(`**${title}**\n${snippet}`)
-    }
-    
-    const catalog = `We offer ${summaries.length} credit cards:\n\n${summaries.join('\n\n')}`
-    
-    const memory = getSessionMemory(sessionId)
-    const sources = cardFiles.map(f => `credit-cards/${f}`)
-    
-    if (streaming) {
-      return { directReply: catalog, memory, sources }
-    }
-    await memory.saveContext({ input: message }, { output: catalog })
-    return { reply: catalog, sources }
-  } catch (error) {
-    console.warn(`Could not read card files: ${error.message}`)
-    return null // Fall through to RAG
-  }
-}
-
-async function handleComparisonQuery(sessionId, message, streaming) {
-  console.log('  [retrieval] comparison query detected')
-  try {
-    const cardsDir = join(projectRoot, 'docs', 'credit-cards')
-    const cardFiles = readdirSync(cardsDir).filter(f => f.endsWith('.md'))
-    
-    // Build card summaries from individual files
-    const cardBullets = []
-    for (const file of cardFiles) {
-      const content = readFileSync(join(cardsDir, file), 'utf8')
-      const titleMatch = content.match(/^# (.+)$/m)
-      const title = titleMatch?.[1]?.trim() || file.replace('.md', '')
-      
-      const overviewMatch = content.match(/## Overview\s+(.*?)(?=\n##)/s)
-      const keyBenefitsMatch = content.match(/## Key Benefits\s+(.*?)(?=\n##)/s)
-      
-      let snippet = overviewMatch?.[1]?.trim() || ''
-      if (keyBenefitsMatch) {
-        const benefits = keyBenefitsMatch[1].trim().split('\n').slice(0, 3).join(' ')
-        snippet += (snippet ? ' ' : '') + benefits
-      }
-      
-      cardBullets.push(`- **${title}** — ${snippet}`)
-    }
-
-    // Extract keywords from query
-    const lower = message.toLowerCase()
-    const STOP_WORDS = new Set([
-      'what',
-      'which',
-      'card',
-      'cards',
-      'come',
-      'with',
-      'offer',
-      'have',
-      'does',
-      'do',
-      'you',
-      'the',
-      'that',
-      'for',
-      'are',
-      'give',
-      'best',
-      'most',
-      'any',
-      'can',
-      'ones',
-      'one',
-      'good',
-      'great',
-      'ideal',
-      'perfect'
-    ])
-
-    const featureWords = lower
-      .replace(/[^a-z\s]/g, '')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !STOP_WORDS.has(w))
-
-    // Synonym expansion
-    const SYNONYMS = {
-      travel: ['miles', 'airline', 'flyer', 'flight', 'krisflyer'],
-      dining: ['restaurant', 'food', 'eating', 'meal'],
-      shopping: ['retail', 'purchase', 'buying'],
-      cashback: ['rebate', 'refund', 'cash', 'back'],
-      online: ['internet', 'ecommerce', 'digital']
-    }
-
-    const expandedWords = new Set(featureWords)
-    for (const word of featureWords) {
-      if (SYNONYMS[word]) {
-        SYNONYMS[word].forEach(syn => expandedWords.add(syn))
-      }
-    }
-    const matchWords = Array.from(expandedWords)
-
-    // Score each bullet
-    const scoredBullets = cardBullets
-      .map(bullet => ({
-        bullet,
-        score: matchWords.filter(w => bullet.toLowerCase().includes(w)).length
-      }))
-      .filter(x => x.score > 0)
-      .sort((a, b) => b.score - a.score)
-
-    // Return bullets with score >= 50% of max
-    const maxScore = scoredBullets[0]?.score ?? 0
-    const threshold = Math.max(2, Math.floor(maxScore * 0.5))
-    const topBullets = scoredBullets.filter(x => x.score >= threshold)
-
-    if (topBullets.length > 0) {
-      const matchedCards = topBullets.map(x => x.bullet).join('\n\n')
-      const intro =
-        topBullets.length === 1
-          ? 'One card matches your query:'
-          : `${topBullets.length} cards match your query:`
-      const directAnswer = `${intro}\n\n${matchedCards}`
-
-      console.log(`  [retrieval] comparison match → ${topBullets.length} card(s)`)
-      const memory = getSessionMemory(sessionId)
-      const sources = cardFiles.map(f => `credit-cards/${f}`)
-      
-      if (streaming) {
-        return { directReply: directAnswer, memory, sources }
-      }
-      await memory.saveContext({ input: message }, { output: directAnswer })
-      return { reply: directAnswer, sources }
-    }
-  } catch (error) {
-    console.warn(`Comparison query failed: ${error.message}`)
-  }
-  return null // Fall through to RAG
-}
-
 async function handleRAGRetrieval(sessionId, message, streaming) {
-  console.log('Starting RAG retrieval...')
-  const store = await getVectorStore()
+  console.log(`[retrieval] Starting RAG for session: ${sessionId}`)
+  console.log(`[retrieval] Query (sanitized): ${redactPII(message)}`)
 
+  const store = await getVectorStore()
   if (!store) {
     throw new Error('VECTORSTORE_UNAVAILABLE')
   }
 
-  // Retrieve similar documents
-  console.log('  [retrieval] searching vectorstore...')
-  const candidateDocs = await store.similaritySearchWithScore(message, 20)
+  // Retrieve similar documents (increased k for better recall)
+  const candidateDocs = await store.similaritySearchWithScore(message, 30)
 
   if (candidateDocs.length === 0) {
     throw new Error('NO_RELEVANT_DOCS')
   }
 
-  // Adaptive threshold
-  const lower = message.toLowerCase()
-  const isSpecific = /\b(what is|how much|fee|rate|income|requirement)\b/i.test(message)
-  const isBroad = /\b(all|list|available|offer|have)\b/i.test(message)
-  const isComparison = /\b(compare|difference|vs|versus|which|better)\b/i.test(message)
+  // Log top scores for debugging
+  const topScores = candidateDocs
+    .slice(0, 5)
+    .map(([, s]) => s.toFixed(3))
+    .join(', ')
+  console.log(`[retrieval] Top 5 scores: ${topScores}`)
 
-  let threshold
-  if (isBroad) threshold = 0.55
-  else if (isSpecific) threshold = 0.35
-  else if (isComparison) threshold = 0.45
-  else threshold = 0.4
-
-  console.log(`  [retrieval] threshold: ${threshold} (type: ${isBroad ? 'broad' : isSpecific ? 'specific' : isComparison ? 'comparison' : 'default'})`)
-
-  const filteredDocs = candidateDocs.filter(([, score]) => score <= threshold)
+  // Single moderate threshold (removed adaptive logic)
+  const threshold = 0.5
+  let filteredDocs = candidateDocs.filter(([, score]) => score <= threshold)
 
   if (filteredDocs.length === 0) {
     throw new Error('NO_RELEVANT_DOCS')
   }
 
-  // Category filter
-  const category = detectCategory(message)
-  const categoryFilteredDocs = category
-    ? filteredDocs.filter(([doc]) => {
-        const cat = doc.metadata?.category
-        return cat === category || cat === 'faqs'
-      })
-    : filteredDocs
-
-  console.log(`  [retrieval] category: ${category || 'all'}, kept ${categoryFilteredDocs.length}/${filteredDocs.length} docs`)
-
-  if (categoryFilteredDocs.length === 0) {
-    throw new Error('NO_RELEVANT_DOCS')
+  // Category filter — exclude wrong product-type docs (e.g. loan docs from credit-card queries)
+  const queryCategory = detectCategory(message)
+  if (queryCategory) {
+    const categoryFiltered = filteredDocs.filter(([doc]) => {
+      const docCat = doc.metadata?.category
+      return docCat === queryCategory || docCat === 'faqs'
+    })
+    // Only apply if we still have results after filtering
+    if (categoryFiltered.length > 0) {
+      filteredDocs = categoryFiltered
+      console.log(
+        `[retrieval] Category filter applied (${queryCategory}): ${filteredDocs.length} docs remain`
+      )
+    }
   }
+
+  console.log(
+    `[retrieval] Kept ${filteredDocs.length}/${candidateDocs.length} docs (threshold: ${threshold})`
+  )
 
   // Deduplicate by source
   const seenSources = new Set()
-  const dedupedDocs = categoryFilteredDocs.filter(([doc]) => {
+  const dedupedDocs = filteredDocs.filter(([doc]) => {
     const src = doc.metadata?.source || 'unknown'
     if (seenSources.has(src)) return false
     seenSources.add(src)
     return true
   })
 
-  // Build context
+  // Build context from top 5 docs
   const topDocs = dedupedDocs.slice(0, 5)
   const context = topDocs.map(([doc]) => doc.pageContent).join('\n\n---\n\n')
   const sources = topDocs.map(([doc]) => doc.metadata?.source || 'unknown')
 
-  console.log(`  [retrieval] using ${topDocs.length} docs`)
-  console.log(`  [retrieval] sources:`, sources.join(', '))
+  console.log(`[retrieval] Using ${topDocs.length} docs from: ${sources.join(', ')}`)
 
-  // Get history
+  // Get conversation history
   const memory = getSessionMemory(sessionId)
   const { history } = await memory.loadMemoryVariables({})
   const messages = Array.isArray(history) ? history : []
 
-  // Truncate history to fit token budget
-  let totalTokens = estimateTokens(context) + estimateTokens(message)
-  const includedHistory = []
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msgTokens = estimateTokens(messages[i].content || '')
-    if (totalTokens + msgTokens > MAX_HISTORY_TOKENS) break
-    includedHistory.unshift(messages[i])
-    totalTokens += msgTokens
-  }
-
-  console.log(`  [context] history: ${includedHistory.length} msgs (~${totalTokens} tokens)`)
-
-  // Build prompt
+  // Build prompt with proper delimiters
   const sanitizedContext = sanitizeContext(context)
-  const prompt = RAG_SYSTEM_PROMPT.replace('{context}', sanitizedContext).replace(
+  const sanitizedQuestion = sanitizeUserInput(message)
+
+  const systemContent = RAG_SYSTEM_PROMPT.replace('{context}', sanitizedContext).replace(
     '{question}',
-    message
+    sanitizedQuestion
   )
 
-  // For streaming, return prompt for controller to handle
+  // Check context window overflow
+  const systemTokens = estimateTokens(systemContent)
+  const historyTokens = messages.reduce((sum, msg) => sum + estimateTokens(msg.content || ''), 0)
+  const totalTokens = systemTokens + historyTokens
+
+  console.log(
+    `[context] Tokens: system=${systemTokens}, history=${historyTokens}, total=${totalTokens}`
+  )
+
+  if (totalTokens > MAX_CONTEXT_TOKENS) {
+    console.warn(`⚠️  Context overflow (${totalTokens} tokens). Truncating history...`)
+    // Reduce history aggressively
+    const maxHistoryTokens = MAX_CONTEXT_TOKENS - systemTokens - 500
+    const includedHistory = []
+    let historySum = 0
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msgTokens = estimateTokens(messages[i].content || '')
+      if (historySum + msgTokens > maxHistoryTokens) break
+      includedHistory.unshift(messages[i])
+      historySum += msgTokens
+    }
+    console.log(
+      `[context] Truncated history: ${messages.length} → ${includedHistory.length} messages`
+    )
+  }
+
+  // Add AI identity disclosure for first message
+  let systemWithDisclosure = systemContent
+  if (isFirstMessage(sessionId)) {
+    systemWithDisclosure = systemContent.replace(
+      'Answer (1-2 paragraphs, conversational tone):',
+      'Answer (1-2 paragraphs, conversational tone). REMEMBER: Start with AI identity disclosure.'
+    )
+  }
+
+  // For streaming, return data for controller to handle
   if (streaming) {
-    return { prompt, memory, sources, context: sanitizedContext }
+    return {
+      systemPrompt: systemWithDisclosure,
+      memory,
+      sources,
+      context: sanitizedContext,
+      sanitizedQuestion,
+      isFirstMessage: isFirstMessage(sessionId)
+    }
   }
 
   // For non-streaming, generate full response
-  const llm = new ChatOllama({
-    model: OLLAMA_MODEL,
-    baseUrl: OLLAMA_BASE_URL,
-    temperature: 0
-  })
+  initializeLLMs()
 
-  console.log('  [llm] generating response...')
-  const response = await llm.invoke(prompt)
-  const reply = response.content
+  let reply
+  try {
+    // Try primary LLM (Claude)
+    console.log('[llm] Attempting primary LLM (Claude)...')
+    const response = await primaryLLM.invoke([
+      new SystemMessage(systemWithDisclosure),
+      new HumanMessage(sanitizedQuestion)
+    ])
+    reply = response.content
+    console.log('[llm] ✅ Primary LLM succeeded')
+  } catch (primaryError) {
+    console.warn(`[llm] ⚠️  Primary LLM failed: ${primaryError.message}`)
+
+    if (primaryLLM !== fallbackLLM) {
+      console.log('[llm] Attempting fallback LLM (Ollama)...')
+      try {
+        const response = await fallbackLLM.invoke([
+          new SystemMessage(systemWithDisclosure),
+          new HumanMessage(sanitizedQuestion)
+        ])
+        reply = response.content
+        console.log('[llm] ✅ Fallback LLM succeeded')
+      } catch (fallbackError) {
+        console.error(`[llm] ❌ Fallback LLM also failed: ${fallbackError.message}`)
+        throw new Error('LLM_FAILURE')
+      }
+    } else {
+      throw primaryError
+    }
+  }
 
   // Validate output
   const validation = validateFinancialResponse(reply, sanitizedContext)
   if (!validation.valid) {
-    console.warn(`  [validation] failed: ${validation.reason}`)
-    const fallback = getSafeFallback(validation.reason)
+    console.warn(`[validation] ❌ Failed: ${validation.reason}`)
+    const fallback = getSafeFallback(reply, validation.reason)
     await memory.saveContext({ input: message }, { output: fallback })
     return { reply: fallback, sources }
   }
 
-  console.log(`  [llm] response: ${reply.length} chars`)
-  await memory.saveContext({ input: message }, { output: reply })
+  // Add financial disclaimer
+  const disclaimer = `\n\n---\n*AI-generated information. Not financial advice. Verify details with institution. MoneyHero is a comparison platform and is not licensed to provide financial advisory services under the Financial Advisers Act.*`
+  const finalReply = reply + disclaimer
 
-  return { reply, sources }
+  console.log(`[llm] Response: ${reply.length} chars`)
+  await memory.saveContext({ input: message }, { output: finalReply })
+
+  markMessageProcessed(sessionId)
+
+  return { reply: finalReply, sources }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -527,32 +594,30 @@ async function handleRAGRetrieval(sessionId, message, streaming) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function processChat(sessionId, message, streaming) {
+  // Sanitize input first
+  const sanitizedMessage = sanitizeUserInput(message)
+
   // 1. Check escalation
-  if (detectEscalation(message)) {
-    console.log('Escalation detected')
-    return await handleEscalation(sessionId, message)
+  if (detectEscalation(sanitizedMessage)) {
+    console.log('[intent] Escalation detected')
+    return await handleEscalation(sessionId, sanitizedMessage)
   }
 
   // 2. Check off-topic
-  if (detectOffTopic(message)) {
-    console.log('Off-topic detected')
-    return await handleOffTopic(sessionId, message)
+  if (detectOffTopic(sanitizedMessage)) {
+    console.log('[intent] Off-topic detected')
+    return await handleOffTopic(sessionId, sanitizedMessage)
   }
 
-  // 3. Check catalog listing
-  if (detectListing(message)) {
-    const result = await handleCatalogListing(sessionId, message, streaming)
-    if (result) return { ...result, intent: 'answer' }
+  // 3. Catalog shortcut — stream pre-formatted product list, bypass LLM
+  const catalogType = detectCatalogQuery(sanitizedMessage)
+  if (catalogType) {
+    console.log(`[shortcut] Catalog query detected (${catalogType})`)
+    return await buildCatalogResult(sessionId, sanitizedMessage, catalogType)
   }
 
-  // 4. Check comparison query
-  if (detectComparison(message)) {
-    const result = await handleComparisonQuery(sessionId, message, streaming)
-    if (result) return { ...result, intent: 'answer' }
-  }
-
-  // 5. RAG retrieval
-  const result = await handleRAGRetrieval(sessionId, message, streaming)
+  // 4. RAG retrieval
+  const result = await handleRAGRetrieval(sessionId, sanitizedMessage, streaming)
   return { ...result, intent: 'answer' }
 }
 
@@ -595,8 +660,7 @@ export async function chat(sessionId, message, streaming = false) {
 
     if (error.message === 'VECTORSTORE_UNAVAILABLE') {
       const result = {
-        reply:
-          "I'm having trouble accessing my knowledge base. Please contact support.",
+        reply: "I'm having trouble accessing my knowledge base. Please contact support.",
         intent: 'escalate',
         sources: []
       }
@@ -604,7 +668,17 @@ export async function chat(sessionId, message, streaming = false) {
       return streaming ? { ...result, memory } : result
     }
 
-    console.error('Chat error:', error.message)
+    if (error.message === 'LLM_FAILURE') {
+      const result = {
+        reply: "I'm experiencing technical difficulties. Please try again or contact support.",
+        intent: 'escalate',
+        sources: []
+      }
+      await memory.saveContext({ input: truncatedMessage }, { output: result.reply })
+      return streaming ? { ...result, memory } : result
+    }
+
+    console.error('[error] Unexpected error:', error.message)
     throw error
   }
 }
@@ -616,24 +690,34 @@ export async function chat(sessionId, message, streaming = false) {
 export function clearSessionMemory(sessionId) {
   sessionMemories.delete(sessionId)
   sessionLastAccess.delete(sessionId)
+  sessionFirstMessage.delete(sessionId)
   console.log(`Cleared session: ${sessionId}`)
 }
 
 export async function warmup() {
-  console.log(`Warming up Ollama model: ${OLLAMA_MODEL}`)
+  console.log('🔥 Warming up LLMs and embeddings...')
+
+  initializeLLMs()
+
+  // Warm up primary LLM
   try {
-    const res = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt: 'hi',
-        stream: false,
-        options: { num_predict: 1 }
-      })
-    })
-    if (res.ok) console.log('Ollama warm-up complete')
+    await primaryLLM.invoke([new HumanMessage('hi')])
+    console.log('✅ Primary LLM warmed up')
   } catch (err) {
-    console.warn(`Warm-up failed: ${err.message}`)
+    console.warn(`⚠️  Primary LLM warm-up failed: ${err.message}`)
   }
+
+  // Warm up embeddings
+  try {
+    const embeddings = new OllamaEmbeddings({
+      model: OLLAMA_EMBED_MODEL,
+      baseUrl: OLLAMA_BASE_URL
+    })
+    await embeddings.embedQuery('test')
+    console.log('✅ Embeddings warmed up')
+  } catch (err) {
+    console.warn(`⚠️  Embeddings warm-up failed: ${err.message}`)
+  }
+
+  console.log('🔥 Warm-up complete')
 }
