@@ -367,7 +367,7 @@ Tests use **Node.js 18+ built-in test runner**:
 
 For test issues:
 
-1. Check [tests/README.md](tests/README.md)
+1. Check [tests/README.md](../tests/README.md)
 2. Review Docker logs: `docker compose logs`
 3. Verify environment: `cat .env`
 4. Run health check: `curl http://localhost:3001/health`

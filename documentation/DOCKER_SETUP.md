@@ -17,11 +17,15 @@ Browser
   │                                  │ /api/* proxy
   │                                  ▼
   └── http://localhost:3001   →  moneyhero-backend
-                                     │ http://ollama:11434
-                                     ▼
-                               moneyhero-ollama
-                               ├── llama3.2:1b  (classifier + generation)
-                               └── nomic-embed-text  (embeddings)
+                                     │
+                                     ├── Anthropic API (HTTPS, external)
+                                     │   Claude Sonnet 4.6  ← primary LLM
+                                     │   (USE_CLAUDE=true + ANTHROPIC_API_KEY)
+                                     │
+                                     └── http://ollama:11434
+                                         moneyhero-ollama
+                                         ├── llama3.2:3b  (LLM fallback)
+                                         └── nomic-embed-text  (embeddings, always)
 ```
 
 **Volumes (host → container):**
@@ -75,17 +79,27 @@ docker compose down
 
 ## Environment Variables (backend container)
 
-Set in `docker-compose.yml`:
+Variables come from two sources:
 
+**`docker-compose.yml` (hardcoded for Docker):**
 ```yaml
 PORT=3001
 OLLAMA_BASE_URL=http://ollama:11434    # internal Docker network name
-OLLAMA_MODEL=llama3.2:1b              # generation model
-OLLAMA_CLASSIFIER_MODEL=llama3.2:1b   # intent classifier
-OLLAMA_EMBED_MODEL=nomic-embed-text   # embeddings
+OLLAMA_MODEL=llama3.2:3b              # LLM fallback model
+OLLAMA_EMBED_MODEL=nomic-embed-text   # embeddings (always Ollama)
 DB_PATH=/app/data/moneyhero.db
 NODE_ENV=production
 ```
+
+**`.env` (read via `env_file:` — override defaults):**
+```
+USE_CLAUDE=true                        # true → Claude primary + Ollama fallback
+ANTHROPIC_API_KEY=sk-ant-...          # required when USE_CLAUDE=true
+```
+
+**LLM selection logic:**
+- `USE_CLAUDE=true` + `ANTHROPIC_API_KEY` set → Claude Sonnet 4.6 is primary; Ollama is fallback
+- `USE_CLAUDE=false` or key missing → Ollama handles all generation
 
 For local development outside Docker, copy `.env.example` to `.env` and set `OLLAMA_BASE_URL=http://localhost:11434`.
 

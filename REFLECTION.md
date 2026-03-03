@@ -4,11 +4,19 @@
 
 **Tools used to build the project:** The primary tool was **Claude Code** (Anthropic's CLI), running inside VS Code via the native extension. I used it in agentic mode — dispatching specialized subagents (scaffolder, rag-engineer, principal-backend-dev, senior-qa-engineer) rather than asking for single-file edits. No other AI *coding* tools were used to write or generate code.
 
-**LLMs powering the product itself:** The chatbot runs entirely on local LLMs via [Ollama](https://ollama.com):
-- `llama3.2:1b` — intent classifier (answer / escalate / off_topic) and response generation
-- `nomic-embed-text` — document embeddings for the HNSWLib vector store
+**LLMs powering the product itself:**
 
-All inference runs locally in Docker. There are no external AI API calls at runtime.
+| Model | Provider | Role | When Used |
+|---|---|---|---|
+| **Claude Sonnet 4.6** | Anthropic API | Primary response generation | `USE_CLAUDE=true` + API key set |
+| `llama3.2:3b` | Ollama (local Docker) | Fallback response generation | Claude API error / key missing |
+| `nomic-embed-text` | Ollama (local Docker) | Document embeddings | Always (vector search) |
+
+**Why Claude as primary?** During development, `llama3.2:1b` (the originally planned model) hallucinated product details — wrong cashback percentages, nonexistent cards — even when the correct information was present in the retrieved context. The 1B model simply lacked the instruction-following capacity to stay grounded. Upgrading to `llama3.2:3b` improved but did not fully resolve this. Claude Sonnet 4.6 solved it entirely: responses are accurate, concise, and faithfully drawn from the retrieved documents.
+
+**Fallback conditions:** If `USE_CLAUDE=false`, `ANTHROPIC_API_KEY` is absent, or the Anthropic API returns an error (timeout, quota exceeded, network failure), the controller automatically retries the same prompt with Ollama. The user sees no interruption — the stream continues seamlessly from the fallback model. This makes Claude an enhancement rather than a hard dependency: the system is fully functional with Ollama alone.
+
+**Embeddings remain local.** `nomic-embed-text` runs in the Ollama Docker container regardless of the `USE_CLAUDE` setting. Document ingestion and vector search never make external API calls.
 
 ---
 
@@ -21,6 +29,8 @@ AI assistance had the clearest impact in four areas:
 **Guardrails layer.** Adding production guardrails (rate limiting, input validation, session checks, profanity filtering, LLM timeouts, vectorstore fallbacks, history capping, output validation) across multiple files in a single session would have taken hours manually. With clear per-agent task lists and explicit file ownership, agents completed their changes concurrently with no conflicts.
 
 **Iterative debugging and strategy review.** When specific conversation patterns produced wrong answers (comparison queries returning one card instead of many, loan listing returning credit card names), Claude Code traced each bug to its root cause — duplicate `const` declarations causing SyntaxErrors, misrouted keywords pointing to the wrong product category, an unresolved `{history}` placeholder — and implemented fixes in priority order across multiple files simultaneously. A strategy review session identified 8 issues in the RAG pipeline, LLM selection, and output validation layers; all 8 were fixed and committed in a single pass.
+
+**Diagnosing LLM capability limits.** After repeated hallucination from llama3.2:1b despite correct RAG context, Claude Code identified that the model's instruction-following capacity was the root cause — not the retrieval pipeline. This led to the Claude Sonnet 4.6 upgrade. Separately, it diagnosed a LangChain `@langchain/anthropic` bug where `topP` defaults to `-1` (rejected by Claude 4.x), and that Claude 4.x rejects receiving both `temperature` and `top_p` simultaneously. The fix (`topP: 1, temperature: null`) was identified by tracing LangChain source code, not by guessing parameter values.
 
 **Boilerplate elimination.** Setting up the Docker Compose configuration, the `setup.sh` script, `.env.example`, `.gitignore`, and the MVC folder restructuring (18 files) required almost no manual effort. The scaffolder and senior-qa-engineer agents handled structural work that would otherwise have been tedious copy-paste from previous projects.
 
