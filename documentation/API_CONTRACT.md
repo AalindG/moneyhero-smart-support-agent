@@ -232,11 +232,134 @@ Health check.
 
 ---
 
+## Admin API
+
+All admin endpoints are under `/api/admin`. Sessions and messages routes require a Bearer token obtained from the login endpoint. Tokens expire after **8 hours**.
+
+### POST /api/admin/login
+
+Authenticates an admin user and returns a session token.
+
+**Request body:**
+```json
+{ "username": "admin", "password": "changeme" }
+```
+
+**Response `200`:**
+```json
+{ "token": "a1b2c3d4e5f6..." }
+```
+
+**Response `401`:**
+```json
+{ "error": "Invalid credentials" }
+```
+
+Credentials are set via `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables.
+
+**Example:**
+```bash
+curl -X POST http://localhost:3001/api/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"changeme"}'
+```
+
+---
+
+### GET /api/admin/sessions
+
+Returns all chat sessions with message counts, newest first.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Response `200`:**
+```json
+{
+  "sessions": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "created_at": "2026-03-03T10:00:00.000Z",
+      "message_count": 6,
+      "last_message_at": "2026-03-03T10:05:32.000Z"
+    }
+  ]
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:3001/api/admin/sessions \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### GET /api/admin/sessions/:sessionId/messages
+
+Returns the full message thread for a session.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Response `200`:**
+```json
+{
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "messages": [
+    { "role": "user",      "content": "What cards offer cashback?", "timestamp": "2026-03-03T10:00:00.000Z" },
+    { "role": "assistant", "content": "2 cards match...",           "timestamp": "2026-03-03T10:00:02.000Z" }
+  ]
+}
+```
+
+**Response `404`:** Session not found.
+
+**Example:**
+```bash
+curl "http://localhost:3001/api/admin/sessions/550e8400-.../messages" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### GET /api/admin/top-questions?limit=10
+
+Returns the top N most-asked user questions across all sessions. Ties broken by most-recently-asked first.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Query params:**
+
+| Param | Type | Default | Max |
+|---|---|---|---|
+| limit | integer | 10 | 50 |
+
+**Response `200`:**
+```json
+{
+  "questions": [
+    {
+      "question": "What credit cards offer cashback?",
+      "count": 14,
+      "last_asked_at": "2026-03-03T10:05:00.000Z"
+    }
+  ]
+}
+```
+
+**Example:**
+```bash
+curl "http://localhost:3001/api/admin/top-questions?limit=10" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
 ## Error Responses
 
 | Status | Condition | Body |
 |---|---|---|
 | 400 | Missing/invalid field | `{ "error": "sessionId is required" }` |
+| 401 | Invalid or expired admin token | `{ "error": "Token expired or invalid" }` |
 | 404 | Session not found | `{ "error": "Session not found" }` |
 | 429 | Rate limit exceeded or escalation cooldown | `{ "error": "Too many requests" }` |
 | 500 | Server error | `{ "error": "Failed to process request" }` |
@@ -318,4 +441,4 @@ All origins allowed in development. Restrict to specific origins in production.
 
 ---
 
-*Last updated: March 2026*
+*Last updated: March 2026 — added admin API endpoints*

@@ -95,6 +95,17 @@ All responses stream word-by-word via SSE.
 | `GET`  | `/api/history/:sessionId` | Conversation history               |
 | `GET`  | `/health`                 | Health check                       |
 
+### Admin API (requires Bearer token)
+
+| Method | Endpoint                                    | Description                          |
+| ------ | ------------------------------------------- | ------------------------------------ |
+| `POST` | `/api/admin/login`                          | Authenticate → `{ token }`           |
+| `GET`  | `/api/admin/sessions`                       | All sessions with message counts     |
+| `GET`  | `/api/admin/sessions/:sessionId/messages`   | Full message thread for a session    |
+| `GET`  | `/api/admin/top-questions?limit=10`         | Top N most-asked questions           |
+
+The Admin Portal is accessible from the chat UI via the **Admin** button in the header. Credentials are set via `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env` (defaults: `admin` / `changeme`).
+
 ### Chat SSE format
 
 ```
@@ -132,15 +143,21 @@ Returns a daily ticket ID: `TKT-YYYYMMDD-NNN`
 
 ## Environment Variables
 
-| Variable            | Default                  | Notes                                        |
-| ------------------- | ------------------------ | -------------------------------------------- |
-| `PORT`              | `3001`                   |                                              |
-| `USE_CLAUDE`        | `false`                  | `true` → Claude primary + Ollama fallback    |
-| `ANTHROPIC_API_KEY` | —                        | Required when `USE_CLAUDE=true`              |
-| `OLLAMA_BASE_URL`   | `http://localhost:11434` | `http://ollama:11434` in Docker              |
-| `OLLAMA_MODEL`      | `llama3.2:3b`            | LLM fallback (or primary if USE_CLAUDE=false)|
-| `OLLAMA_EMBED_MODEL`| `nomic-embed-text`       | Embeddings — always Ollama                   |
-| `DB_PATH`           | `./data/moneyhero.db`    |                                              |
+Core variables — see `.env.example` for the full list.
+
+| Variable                    | Default                  | Notes                                              |
+| --------------------------- | ------------------------ | -------------------------------------------------- |
+| `PORT`                      | `3001`                   |                                                    |
+| `USE_CLAUDE`                | `false`                  | `true` → Claude primary + Ollama fallback          |
+| `ANTHROPIC_API_KEY`         | —                        | Required when `USE_CLAUDE=true`                    |
+| `CLAUDE_MODEL`              | `claude-sonnet-4-6`      |                                                    |
+| `OLLAMA_BASE_URL`           | `http://localhost:11434` | `http://ollama:11434` in Docker                    |
+| `OLLAMA_MODEL`              | `llama3.2:3b`            | LLM fallback (or primary if `USE_CLAUDE=false`)    |
+| `OLLAMA_EMBED_MODEL`        | `nomic-embed-text`       | Embeddings — always Ollama                         |
+| `DB_PATH`                   | `./data/moneyhero.db`    |                                                    |
+| `RETRIEVAL_SCORE_THRESHOLD` | `0.75`                   | Cosine similarity cutoff for vector search         |
+| `ADMIN_USERNAME`            | `admin`                  | Admin portal login                                 |
+| `ADMIN_PASSWORD`            | `changeme`               | Change in production                               |
 
 Copy `.env.example` to `.env` for local development.
 

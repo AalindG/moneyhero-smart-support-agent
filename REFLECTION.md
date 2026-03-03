@@ -34,6 +34,8 @@ AI assistance had the clearest impact in four areas:
 
 **Boilerplate elimination.** Setting up the Docker Compose configuration, the `setup.sh` script, `.env.example`, `.gitignore`, and the MVC folder restructuring (18 files) required almost no manual effort. The scaffolder and senior-qa-engineer agents handled structural work that would otherwise have been tedious copy-paste from previous projects.
 
+**Security audit and hardening.** Asking an AI expert agent to review the codebase for security issues produced a structured report covering 18 findings. The high-priority items — hardcoded model names and tuning parameters, the retrieval score threshold being too permissive, and the docker-compose.yml `environment:` block silently overriding `.env` values — were fixed in a single pass across 7 files. An admin portal with timing-safe credential comparison, in-memory token store, and 8-hour TTL was added as a complete feature spanning 6 backend and 4 frontend files, all in one session.
+
 ---
 
 ## Prompting Strategies
@@ -65,7 +67,10 @@ AI assistance had the clearest impact in four areas:
 | React frontend (chat UI, streaming, session management) | ~45 min |
 | Deterministic retrieval shortcuts (catalog, comparison, fee extraction) | ~50 min |
 | Strategy review + 8-bug fix pass | ~40 min |
+| Security audit + env var extraction (7 files) | ~25 min |
+| Admin portal (backend + frontend, 10 files) | ~30 min |
+| Top 10 questions feature + documentation update | ~20 min |
 | Documentation + port fixes | ~15 min |
-| **Total** | **~6 hours** |
+| **Total** | **~7.5 hours** |
 
 The bulk of that time was spent writing prompts, reviewing agent output, and testing conversations — not writing code directly. The most valuable investment was the upfront architecture decisions in `CLAUDE.md` (file ownership, agent routing rules, API contracts) which made all subsequent parallel work conflict-free.

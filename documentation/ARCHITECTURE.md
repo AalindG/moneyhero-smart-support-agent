@@ -14,6 +14,7 @@ src/
 │   └── embeddingValidation.js    # Embedding dimension sanity checks
 │
 ├── controllers/
+│   ├── admin.controller.js       # POST /api/admin/login, GET /api/admin/*
 │   ├── chat.controller.js        # POST /api/chat — intent → RAG → SSE stream
 │   ├── escalation.controller.js  # POST /api/escalate — log + ticket
 │   ├── feedback.controller.js    # POST/GET /api/feedback, GET /api/analytics/:sessionId
@@ -21,6 +22,7 @@ src/
 │   └── session.controller.js     # POST /api/session
 │
 ├── middleware/
+│   ├── adminAuth.js              # In-memory token store, 8-hour TTL, timing-safe auth
 │   ├── errorHandler.js           # Global error handler + asyncHandler wrapper
 │   ├── outputValidation.js       # Blocks prompt-leakage patterns before SSE flush
 │   ├── sse.js                    # SSE response helpers (writeToken, writeDone)
@@ -30,11 +32,12 @@ src/
 │   ├── analytics.model.js        # qa_analytics + quality_metrics CRUD
 │   ├── escalation.model.js       # escalations CRUD
 │   ├── feedback.model.js         # feedback CRUD
-│   ├── message.model.js          # messages CRUD
-│   └── session.model.js          # sessions CRUD
+│   ├── message.model.js          # messages CRUD + findTopQuestions()
+│   └── session.model.js          # sessions CRUD + findAll()
 │
 ├── routes/
 │   ├── index.js                  # Mounts all sub-routers under /api
+│   ├── admin.routes.js           # POST /api/admin/login, GET /api/admin/sessions, top-questions
 │   ├── analytics.routes.js       # GET /api/analytics/:sessionId
 │   ├── chat.routes.js            # POST /api/chat
 │   ├── escalation.routes.js      # POST /api/escalate
@@ -82,7 +85,7 @@ Routes → Controllers → Models (SQLite)
 | Controllers | `controllers/*.controller.js` | Request orchestration, response formatting |
 | Models | `models/*.model.js` | SQLite queries only — no business logic |
 | Services | `services/ollama.service.js` | External API (Ollama) streaming |
-| Middleware | `middleware/` | Cross-cutting: validation, SSE, error handling, output filtering |
+| Middleware | `middleware/` | Cross-cutting: validation, SSE, error handling, output filtering, admin auth |
 | RAG | `agent.js` | All retrieval and generation logic — black box to the API layer |
 
 ## Request Flow
@@ -185,49 +188,87 @@ Five tables, all initialised on startup in `config/database.js`:
 
 ## API Endpoints
 
-| Method | Endpoint | Controller | Description |
-|---|---|---|---|
-| POST | /api/session | session.controller.js | Create session → `{ sessionId }` |
-| POST | /api/chat | chat.controller.js | Send message → SSE token stream |
-| POST | /api/escalate | escalation.controller.js | Log escalation → `{ success, ticketId }` |
-| GET | /api/history/:sessionId | history.controller.js | Conversation history |
-| POST | /api/feedback | feedback.controller.js | Submit rating/comment |
-| GET | /api/feedback/:sessionId | feedback.controller.js | Get feedback for session |
-| GET | /api/analytics/:sessionId | feedback.controller.js | Q&A interactions + feedback |
-| GET | /health | index.js | Health check |
+| Method | Endpoint | Controller | Auth | Description |
+|---|---|---|---|---|
+| POST | /api/session | session.controller.js | — | Create session → `{ sessionId }` |
+| POST | /api/chat | chat.controller.js | — | Send message → SSE token stream |
+| POST | /api/escalate | escalation.controller.js | — | Log escalation → `{ success, ticketId }` |
+| GET | /api/history/:sessionId | history.controller.js | — | Conversation history |
+| POST | /api/feedback | feedback.controller.js | — | Submit rating/comment |
+| GET | /api/feedback/:sessionId | feedback.controller.js | — | Get feedback for session |
+| GET | /api/analytics/:sessionId | feedback.controller.js | — | Q&A interactions + feedback |
+| GET | /health | index.js | — | Health check |
+| POST | /api/admin/login | admin.controller.js | — | Authenticate → `{ token }` |
+| GET | /api/admin/sessions | admin.controller.js | Bearer token | All sessions with message counts |
+| GET | /api/admin/sessions/:sessionId/messages | admin.controller.js | Bearer token | Full message thread |
+| GET | /api/admin/top-questions | admin.controller.js | Bearer token | Top N most-asked questions |
 
 ## Guardrails
 
 | Guard | Where | Behaviour |
 |---|---|---|
-| Rate limit (global) | `index.js` | 100 req / 15 min per IP |
-| Rate limit (chat) | `index.js` | 20 req / min per IP |
+| Rate limit (global) | `index.js` | 100 req / 15 min per IP (configurable via `RATE_LIMIT_GLOBAL_*`) |
+| Rate limit (chat) | `index.js` | 20 req / min per IP (configurable via `RATE_LIMIT_CHAT_*`) |
 | Input validation | `middleware/validation.js` | sessionId ≤ 100 chars, message ≤ 2000 chars |
 | Session gate | controllers | 404 if sessionId not in DB |
-| Escalation cooldown | `escalation.controller.js` | 429 if same session escalates within 10 min |
+| Escalation cooldown | `escalation.controller.js` | 429 if same session escalates within 10 min (`ESCALATION_COOLDOWN_MINUTES`) |
 | Profanity filter | `utils/compliance.js` | 400 before any LLM call |
-| LLM timeout | `agent.js` | 90 s, safe fallback response on timeout |
+| LLM timeout | `agent.js` | 90 s (`LLM_TIMEOUT_MS`), safe fallback response on timeout |
 | Output validation | `middleware/outputValidation.js` | Strips prompt-leakage patterns before SSE |
+| Admin auth | `middleware/adminAuth.js` | Bearer token, in-memory store, 8-hour TTL, timing-safe comparison |
 | Category filter | `agent.js` | Credit card docs excluded from loan answers and vice versa |
 | History cap | `agent.js` | Token-based cap (200 tokens) to keep prompt under 3000 chars |
 | Vectorstore missing | `agent.js` | Safe fallback, no crash |
 
 ## Environment Variables
 
+All values have sensible defaults; only `ANTHROPIC_API_KEY` is required for Claude mode.
+
 ```
+# Server
 PORT=3001
 DB_PATH=./data/moneyhero.db
+NODE_ENV=development
+CORS_ORIGIN=*
 
 # LLM selection
 USE_CLAUDE=true                           # true → Claude primary + Ollama fallback
 ANTHROPIC_API_KEY=sk-ant-...             # required when USE_CLAUDE=true
+CLAUDE_MODEL=claude-sonnet-4-6           # Claude model name
+CLAUDE_MAX_TOKENS=500                    # max tokens per Claude response
 
 # Ollama (embeddings always; generation when USE_CLAUDE=false)
 OLLAMA_BASE_URL=http://localhost:11434   # http://ollama:11434 in Docker
 OLLAMA_MODEL=llama3.2:3b                # generation fallback model
+OLLAMA_CLASSIFIER_MODEL=llama3.2:1b     # intent classifier (small model)
 OLLAMA_EMBED_MODEL=nomic-embed-text     # embeddings (always Ollama)
+OLLAMA_TEMPERATURE=0                    # generation temperature
+OLLAMA_MAX_TOKENS=900                   # max tokens per Ollama response
 
-NODE_ENV=development
+# RAG pipeline
+RETRIEVAL_K=30                          # candidate docs from vector search
+RETRIEVAL_SCORE_THRESHOLD=0.75          # cosine similarity cutoff (0-1)
+MAX_CONTEXT_TOKENS=6000                 # max context chars sent to LLM
+LLM_TIMEOUT_MS=90000                    # LLM call timeout (ms)
+SESSION_TTL_MS=3600000                  # in-memory session cache TTL (ms)
+
+# Ingestion
+CHUNK_SIZE=1500                         # chars per document chunk
+CHUNK_OVERLAP=250                       # overlap between chunks
+
+# Rate limiting
+RATE_LIMIT_GLOBAL_WINDOW_MS=900000      # 15 min
+RATE_LIMIT_GLOBAL_MAX=100              # requests per window per IP
+RATE_LIMIT_CHAT_WINDOW_MS=60000        # 1 min
+RATE_LIMIT_CHAT_MAX=20                 # requests per window per IP
+
+# Escalation & SSE
+ESCALATION_COOLDOWN_MINUTES=10
+SSE_KEEPALIVE_INTERVAL_MS=2000
+
+# Admin portal
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=changeme                 # change in production!
 ```
 
 ## Key Design Decisions
@@ -244,4 +285,4 @@ NODE_ENV=development
 
 ---
 
-*Last updated: March 2026 — Architecture v2.2*
+*Last updated: March 2026 — Architecture v2.3 (admin portal, env var extraction, top-questions)*

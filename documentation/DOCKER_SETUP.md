@@ -81,21 +81,41 @@ docker compose down
 
 Variables come from two sources:
 
-**`docker-compose.yml` (hardcoded for Docker):**
+**`docker-compose.yml` (Docker-specific overrides — do not add model names here):**
 ```yaml
 PORT=3001
 OLLAMA_BASE_URL=http://ollama:11434    # internal Docker network name
-OLLAMA_MODEL=llama3.2:3b              # LLM fallback model
-OLLAMA_EMBED_MODEL=nomic-embed-text   # embeddings (always Ollama)
 DB_PATH=/app/data/moneyhero.db
 NODE_ENV=production
 ```
 
-**`.env` (read via `env_file:` — override defaults):**
+**`.env` (read via `env_file:` — all other config goes here):**
 ```
-USE_CLAUDE=true                        # true → Claude primary + Ollama fallback
-ANTHROPIC_API_KEY=sk-ant-...          # required when USE_CLAUDE=true
+# LLM
+USE_CLAUDE=true
+ANTHROPIC_API_KEY=sk-ant-...
+CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_MAX_TOKENS=500
+
+# Ollama models
+OLLAMA_MODEL=llama3.2:3b
+OLLAMA_CLASSIFIER_MODEL=llama3.2:1b
+OLLAMA_EMBED_MODEL=nomic-embed-text
+OLLAMA_TEMPERATURE=0
+OLLAMA_MAX_TOKENS=900
+
+# RAG tuning
+RETRIEVAL_K=30
+RETRIEVAL_SCORE_THRESHOLD=0.75
+MAX_CONTEXT_TOKENS=6000
+LLM_TIMEOUT_MS=90000
+
+# Admin portal
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=changeme    # set a strong password in production!
 ```
+
+**Important:** Do NOT add model names to the inline `environment:` block in `docker-compose.yml` — it silently overrides the `.env` values. Only Docker-specific values (port, internal URLs, paths, NODE_ENV) belong there.
 
 **LLM selection logic:**
 - `USE_CLAUDE=true` + `ANTHROPIC_API_KEY` set → Claude Sonnet 4.6 is primary; Ollama is fallback
@@ -163,6 +183,14 @@ docker volume ls | grep ollama
 
 # List models in volume
 docker compose exec ollama ollama list
+```
+
+### Frontend changes not showing after edit
+
+The `frontend/src/` directory is baked into the nginx image at build time — it is **not** volume-mounted. After changing any frontend source file you must rebuild the image:
+
+```bash
+docker compose build frontend && docker compose up -d frontend
 ```
 
 ### Frontend not loading
